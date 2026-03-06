@@ -92,6 +92,33 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
+<details> <summary>如果遇到 SSL / 证书验证错误</summary>
+
+在部分企业网络或代理环境中，可能会出现类似错误：
+
+certificate verify failed
+self signed certificate in certificate chain
+
+可以在 uvx 参数中添加 --native-tls，使其使用系统证书库：
+
+claude mcp add-json grok-search --scope user '{
+  "type": "stdio",
+  "command": "uvx",
+  "args": [
+    "--native-tls",
+    "--from",
+    "git+https://github.com/GuDaStudio/GrokSearch@grok-with-tavily",
+    "grok-search"
+  ],
+  "env": {
+    "GROK_API_URL": "https://your-api-endpoint.com/v1",
+    "GROK_API_KEY": "your-grok-api-key",
+    "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com"
+  }
+}'
+</details> ```
+
 除此之外，你还可以在`env`字段中配置更多环境变量
 
 | 变量 | 必填 | 默认值 | 说明 |
