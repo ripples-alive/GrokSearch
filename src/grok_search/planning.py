@@ -82,6 +82,13 @@ REQUIRED_PHASES: dict[int, set[str]] = {
     3: set(PHASE_NAMES),
 }
 
+_ACCUMULATIVE_LIST_PHASES = {"query_decomposition", "tool_selection"}
+_MERGE_STRATEGY_PHASE = "search_strategy"
+
+
+def _split_csv(value: str) -> list[str]:
+    return [s.strip() for s in value.split(",") if s.strip()] if value else []
+
 
 class PhaseRecord(BaseModel):
     phase: str
@@ -116,6 +123,9 @@ class PlanningEngine:
     def __init__(self):
         self._sessions: dict[str, PlanningSession] = {}
 
+    def get_session(self, session_id: str) -> PlanningSession | None:
+        return self._sessions.get(session_id)
+
     def process_phase(
         self,
         phase: str,
@@ -137,9 +147,43 @@ class PlanningEngine:
         if target not in PHASE_NAMES:
             return {"error": f"Unknown phase: {target}. Valid: {', '.join(PHASE_NAMES)}"}
 
-        session.phases[target] = PhaseRecord(
-            phase=target, thought=thought, data=phase_data, confidence=confidence
-        )
+        if target in _ACCUMULATIVE_LIST_PHASES:
+            if is_revision:
+                session.phases[target] = PhaseRecord(
+                    phase=target, thought=thought,
+                    data=[phase_data] if not isinstance(phase_data, list) else phase_data,
+                    confidence=confidence,
+                )
+            elif target in session.phases and isinstance(session.phases[target].data, list):
+                session.phases[target].data.append(phase_data)
+                session.phases[target].thought = thought
+                session.phases[target].confidence = confidence
+            else:
+                session.phases[target] = PhaseRecord(
+                    phase=target, thought=thought, data=[phase_data], confidence=confidence,
+                )
+        elif target == _MERGE_STRATEGY_PHASE:
+            existing = session.phases.get(target)
+            if is_revision:
+                session.phases[target] = PhaseRecord(
+                    phase=target, thought=thought, data=phase_data, confidence=confidence,
+                )
+            elif existing and isinstance(existing.data, dict) and isinstance(phase_data, dict):
+                existing.data.setdefault("search_terms", []).extend(phase_data.get("search_terms", []))
+                if phase_data.get("approach"):
+                    existing.data["approach"] = phase_data["approach"]
+                if phase_data.get("fallback_plan"):
+                    existing.data["fallback_plan"] = phase_data["fallback_plan"]
+                existing.thought = thought
+                existing.confidence = confidence
+            else:
+                session.phases[target] = PhaseRecord(
+                    phase=target, thought=thought, data=phase_data, confidence=confidence,
+                )
+        else:
+            session.phases[target] = PhaseRecord(
+                phase=target, thought=thought, data=phase_data, confidence=confidence,
+            )
 
         if target == "complexity_assessment" and isinstance(phase_data, dict):
             level = phase_data.get("level")
