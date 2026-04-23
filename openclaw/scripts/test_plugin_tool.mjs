@@ -9,6 +9,26 @@ function buildPluginConfigFromInput(rawConfig) {
   return rawConfig;
 }
 
+function splitBearerToken(pluginConfig) {
+  const configObject = buildPluginConfigFromInput(pluginConfig);
+  const mcp = configObject.mcp && typeof configObject.mcp === "object" && !Array.isArray(configObject.mcp)
+    ? { ...configObject.mcp }
+    : {};
+  const bearerToken = typeof mcp.bearerToken === "string" && mcp.bearerToken.trim()
+    ? mcp.bearerToken.trim()
+    : "";
+  if ("bearerToken" in mcp) {
+    delete mcp.bearerToken;
+  }
+  return {
+    bearerToken,
+    pluginConfig: {
+      ...configObject,
+      ...(configObject.mcp ? { mcp } : {}),
+    },
+  };
+}
+
 function usage() {
   console.error(`Usage: node openclaw/scripts/test_plugin_tool.mjs <command> [json-params] [json-plugin-config]
 
@@ -49,7 +69,13 @@ if (rawPluginConfig) {
 }
 
 try {
-  const payload = await runWrapperCommand({ command, params, pluginConfig });
+  const runtimeInput = splitBearerToken(pluginConfig);
+  const payload = await runWrapperCommand({
+    command,
+    params,
+    pluginConfig: runtimeInput.pluginConfig,
+    bearerToken: runtimeInput.bearerToken,
+  });
   console.log(JSON.stringify(payload, null, 2));
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
