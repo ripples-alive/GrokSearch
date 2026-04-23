@@ -15,13 +15,13 @@ from pydantic import Field
 # 尝试使用绝对导入（支持 mcp run）
 try:
     from grok_search.providers.grok import GrokSearchProvider
-    from grok_search.logger import log_info
+    from grok_search.logger import log_exception, log_info
     from grok_search.config import config
     from grok_search.sources import SourcesCache, merge_sources, new_session_id, split_answer_and_sources
     from grok_search.planning import engine as planning_engine, _split_csv
 except ImportError:
     from .providers.grok import GrokSearchProvider
-    from .logger import log_info
+    from .logger import log_exception, log_info
     from .config import config
     from .sources import SourcesCache, merge_sources, new_session_id, split_answer_and_sources
     from .planning import engine as planning_engine, _split_csv
@@ -64,6 +64,9 @@ def build_mcp() -> FastMCP:
                 "streamable_http_path": config.mcp_streamable_http_path,
                 "sse_path": config.mcp_sse_path,
                 "auth_enabled": bool(config.mcp_bearer_token),
+                "debug_enabled": config.debug_enabled,
+                "log_level": config.log_level,
+                "log_dir": str(config.log_dir),
             }
         )
 
@@ -170,6 +173,7 @@ async def web_search(
     platform: Annotated[str, "Target platform to focus on (e.g., 'Twitter', 'GitHub', 'Reddit'). Leave empty for general web search."] = "",
     model: Annotated[str, "Optional model ID for this request only. This value is used ONLY when user explicitly provided."] = "",
     extra_sources: Annotated[int, "Number of additional reference results from Tavily/Firecrawl. Set 0 to disable. Default 0."] = 0,
+    ctx: Context = None,
 ) -> dict:
     session_id = new_session_id()
     try:
@@ -206,22 +210,25 @@ async def web_search(
     # 并行执行搜索任务
     async def _safe_grok() -> str:
         try:
-            return await grok_provider.search(query, platform)
-        except Exception:
+            return await grok_provider.search(query, platform, ctx=ctx)
+        except Exception as e:
+            await log_exception(ctx, "Grok search failed", e, config.debug_enabled)
             return ""
 
     async def _safe_tavily() -> list[dict] | None:
         try:
             if tavily_count:
                 return await _call_tavily_search(query, tavily_count)
-        except Exception:
+        except Exception as e:
+            await log_exception(ctx, "Tavily extra search failed", e, config.debug_enabled)
             return None
 
     async def _safe_firecrawl() -> list[dict] | None:
         try:
             if firecrawl_count:
                 return await _call_firecrawl_search(query, firecrawl_count)
-        except Exception:
+        except Exception as e:
+            await log_exception(ctx, "Firecrawl extra search failed", e, config.debug_enabled)
             return None
 
     coros: list = [_safe_grok()]
@@ -291,7 +298,9 @@ async def _call_tavily_extract(url: str) -> str | None:
                 content = data["results"][0].get("raw_content", "")
                 return content if content and content.strip() else None
             return None
-    except Exception:
+    except Exception as e:
+        if config.debug_enabled:
+            await log_exception(None, f"Tavily extract failed for {url}", e, True)
         return None
 
 
@@ -319,7 +328,9 @@ async def _call_tavily_search(query: str, max_results: int = 6) -> list[dict] | 
                 {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", ""), "score": r.get("score", 0)}
                 for r in results
             ] if results else None
-    except Exception:
+    except Exception as e:
+        if config.debug_enabled:
+            await log_exception(None, f"Tavily search failed for query={query!r}", e, True)
         return None
 
 
@@ -341,7 +352,9 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
                 {"title": r.get("title", ""), "url": r.get("url", ""), "description": r.get("description", "")}
                 for r in results
             ] if results else None
-    except Exception:
+    except Exception as e:
+        if config.debug_enabled:
+            await log_exception(None, f"Firecrawl search failed for query={query!r}", e, True)
         return None
 
 

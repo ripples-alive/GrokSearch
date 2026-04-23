@@ -207,6 +207,22 @@ curl http://127.0.0.1:8000/health
 
 不要把裸 `GET /mcp` 当成业务可用性探针；`/mcp` 是 MCP 协议入口，不是普通 REST API。
 
+### 日志与排错
+
+开启：
+
+```env
+GROK_DEBUG=true
+GROK_LOG_LEVEL=DEBUG
+```
+
+后，日志会同时：
+
+- 输出到容器标准错误，可直接看 `docker compose logs -f grok-search`
+- 写入 `GROK_LOG_DIR` 对应目录
+
+像 `web_search` 里 Grok/Tavily/Firecrawl 的异常，之前会被静默吞掉；现在会在 Debug 模式下明确打印出来。
+
 ### 团队成员如何接入远程 MCP
 
 #### Codex
