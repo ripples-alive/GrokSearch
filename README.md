@@ -296,6 +296,24 @@ python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py health
 python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py probe
 ```
 
+### GitHub Image Build
+
+仓库已附带 GitHub Actions 自动构建工作流：
+
+- [docker-image.yml](./.github/workflows/docker-image.yml)
+
+行为：
+
+- push 到 `main` 时自动构建并推送 GHCR
+- push `v*` tag 时自动发布对应 tag
+- PR 时只构建不推送
+
+默认镜像名：
+
+```text
+ghcr.io/ripples-alive/grok-search
+```
+
 
 ### 验证安装
 
