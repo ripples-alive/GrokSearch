@@ -256,12 +256,6 @@ class Config:
             config_status = f"❌ 配置错误: {str(e)}"
 
         return {
-            "GROK_API_URL": api_url,
-            "GROK_API_KEY": api_key_masked,
-            "GROK_MODEL": self.grok_model,
-            "GROK_DEBUG": self.debug_enabled,
-            "GROK_LOG_LEVEL": self.log_level,
-            "GROK_LOG_DIR": str(self.log_dir),
             "GROK_MCP_TRANSPORT": self.mcp_transport,
             "GROK_MCP_HOST": self.mcp_host,
             "GROK_MCP_PORT": self.mcp_port,
@@ -269,6 +263,12 @@ class Config:
             "GROK_MCP_SSE_PATH": self.mcp_sse_path,
             "GROK_MCP_STATELESS_HTTP": self.mcp_stateless_http,
             "GROK_MCP_BEARER_TOKEN": self._mask_api_key(self.mcp_bearer_token) if self.mcp_bearer_token else "未配置",
+            "GROK_API_URL": api_url,
+            "GROK_API_KEY": api_key_masked,
+            "GROK_MODEL": self.grok_model,
+            "GROK_DEBUG": self.debug_enabled,
+            "GROK_LOG_LEVEL": self.log_level,
+            "GROK_LOG_DIR": str(self.log_dir),
             "TAVILY_API_URL": self.tavily_api_url,
             "TAVILY_ENABLED": self.tavily_enabled,
             "TAVILY_API_KEY": self._mask_api_key(self.tavily_api_key) if self.tavily_api_key else "未配置",

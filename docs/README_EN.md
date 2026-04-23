@@ -238,6 +238,20 @@ This repository now ships a Codex/Claude-oriented `skill/` bundle for shared rem
 - [../skill/README.md](../skill/README.md)
 - [../skill/SKILL.md](../skill/SKILL.md)
 
+### OpenClaw
+
+This repository also ships a dedicated OpenClaw bundle:
+
+- [../openclaw/README.md](../openclaw/README.md)
+- [../openclaw/SKILL.md](../openclaw/SKILL.md)
+
+Install the local bundle:
+
+```bash
+bash openclaw/scripts/install_openclaw_skill.sh \
+  --install-to ~/.openclaw/skills/grok-search
+```
+
 
 ### Verify Installation
 

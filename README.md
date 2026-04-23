@@ -131,6 +131,13 @@ claude mcp add-json grok-search --scope user '{
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
+| `GROK_MCP_TRANSPORT` | ❌ | `stdio` | MCP 传输方式：`stdio`、`streamable-http`、`sse` |
+| `GROK_MCP_HOST` | ❌ | `127.0.0.1` | HTTP MCP 监听地址 |
+| `GROK_MCP_PORT` | ❌ | `8000` | HTTP MCP 监听端口 |
+| `GROK_MCP_STREAMABLE_HTTP_PATH` | ❌ | `/mcp` | Streamable HTTP 路径 |
+| `GROK_MCP_SSE_PATH` | ❌ | `/sse` | SSE 路径 |
+| `GROK_MCP_STATELESS_HTTP` | ❌ | `false` | 是否启用无状态 HTTP |
+| `GROK_MCP_BEARER_TOKEN` | ❌ | - | 远程 HTTP MCP 的 Bearer Token |
 | `GROK_API_URL` | ✅ | - | Grok API 地址（OpenAI 兼容格式） |
 | `GROK_API_KEY` | ✅ | - | Grok API 密钥 |
 | `GROK_MODEL` | ❌ | `grok-4-fast` | 默认模型（设置后优先于 `~/.config/grok-search/config.json`） |
@@ -145,13 +152,6 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_RETRY_MAX_ATTEMPTS` | ❌ | `3` | 最大重试次数 |
 | `GROK_RETRY_MULTIPLIER` | ❌ | `1` | 重试退避乘数 |
 | `GROK_RETRY_MAX_WAIT` | ❌ | `10` | 重试最大等待秒数 |
-| `GROK_MCP_TRANSPORT` | ❌ | `stdio` | MCP 传输方式：`stdio`、`streamable-http`、`sse` |
-| `GROK_MCP_HOST` | ❌ | `127.0.0.1` | HTTP MCP 监听地址 |
-| `GROK_MCP_PORT` | ❌ | `8000` | HTTP MCP 监听端口 |
-| `GROK_MCP_STREAMABLE_HTTP_PATH` | ❌ | `/mcp` | Streamable HTTP 路径 |
-| `GROK_MCP_SSE_PATH` | ❌ | `/sse` | SSE 路径 |
-| `GROK_MCP_STATELESS_HTTP` | ❌ | `false` | 是否启用无状态 HTTP |
-| `GROK_MCP_BEARER_TOKEN` | ❌ | - | 远程 HTTP MCP 的 Bearer Token |
 
 ### Docker / Compose 远程部署
 
@@ -166,13 +166,13 @@ cp .env.example .env
 2. 至少填写这些变量：
 
 ```env
-GROK_API_URL=https://your-api-endpoint.com/v1
-GROK_API_KEY=your-grok-api-key
 MCP_TRANSPORT=streamable-http
 MCP_HOST=0.0.0.0
 MCP_PORT=8000
 MCP_STREAMABLE_HTTP_PATH=/mcp
 MCP_BEARER_TOKEN=change-this-token
+GROK_API_URL=https://your-api-endpoint.com/v1
+GROK_API_KEY=your-grok-api-key
 ```
 
 3. 启动服务：
@@ -255,6 +255,45 @@ claude mcp add \
 
 ```bash
 bash skill/scripts/install_codex_skill.sh
+```
+
+### OpenClaw
+
+仓库里也已附带 `OpenClaw` 用的独立 bundle：
+
+- [openclaw/README.md](./openclaw/README.md)
+- [openclaw/SKILL.md](./openclaw/SKILL.md)
+
+本地安装 bundle：
+
+```bash
+bash openclaw/scripts/install_openclaw_skill.sh \
+  --install-to ~/.openclaw/skills/grok-search
+```
+
+推荐通过 OpenClaw skill env 注入：
+
+```json
+{
+  "skills": {
+    "entries": {
+      "grok-search": {
+        "enabled": true,
+        "env": {
+          "GROKSEARCH_MCP_BASE_URL": "https://search.example.com",
+          "GROKSEARCH_MCP_BEARER_TOKEN": "your-token"
+        }
+      }
+    }
+  }
+}
+```
+
+验收：
+
+```bash
+python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py health
+python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py probe
 ```
 
 
