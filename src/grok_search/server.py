@@ -1,5 +1,7 @@
 import sys
 from pathlib import Path
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 # 支持直接运行：添加 src 目录到 Python 路径
 src_dir = Path(__file__).parent.parent
@@ -26,11 +28,49 @@ except ImportError:
 
 import asyncio
 
-mcp = FastMCP("grok-search")
-
 _SOURCES_CACHE = SourcesCache(max_size=256)
 _AVAILABLE_MODELS_CACHE: dict[tuple[str, str], list[str]] = {}
 _AVAILABLE_MODELS_LOCK = asyncio.Lock()
+
+
+def _build_auth_provider():
+    if not config.mcp_bearer_token:
+        return None
+
+    try:
+        from fastmcp.server.auth import StaticTokenVerifier
+    except ImportError:
+        return None
+
+    return StaticTokenVerifier(
+        tokens={
+            config.mcp_bearer_token: {
+                "client_id": "grok-search-client",
+                "scopes": ["mcp"],
+            }
+        }
+    )
+
+
+def build_mcp() -> FastMCP:
+    server = FastMCP("grok-search", auth=_build_auth_provider())
+
+    @server.custom_route("/health", methods=["GET"], include_in_schema=False)
+    async def health_check(request: Request) -> JSONResponse:
+        return JSONResponse(
+            {
+                "status": "ok",
+                "transport": config.mcp_transport,
+                "streamable_http_path": config.mcp_streamable_http_path,
+                "sse_path": config.mcp_sse_path,
+                "auth_enabled": bool(config.mcp_bearer_token),
+            }
+        )
+
+    return server
+
+
+mcp = build_mcp()
 
 
 async def _fetch_available_models(api_url: str, api_key: str) -> list[str]:
@@ -880,7 +920,21 @@ def main():
         threading.Thread(target=monitor_parent, daemon=True).start()
 
     try:
-        mcp.run(transport="stdio", show_banner=False)
+        run_kwargs = {"transport": config.mcp_transport, "show_banner": False}
+        if config.mcp_transport != "stdio":
+            run_kwargs.update(
+                {
+                    "host": config.mcp_host,
+                    "port": config.mcp_port,
+                    "path": (
+                        config.mcp_sse_path
+                        if config.mcp_transport == "sse"
+                        else config.mcp_streamable_http_path
+                    ),
+                    "stateless_http": config.mcp_stateless_http,
+                }
+            )
+        mcp.run(**run_kwargs)
     except KeyboardInterrupt:
         pass
     finally:

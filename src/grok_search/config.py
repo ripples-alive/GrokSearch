@@ -2,6 +2,7 @@ import os
 import json
 from pathlib import Path
 
+
 class Config:
     _instance = None
     _SETUP_COMMAND = (
@@ -11,6 +12,11 @@ class Config:
         '"env":{"GROK_API_URL":"your-api-url","GROK_API_KEY":"your-api-key"}}\''
     )
     _DEFAULT_MODEL = "grok-4-fast"
+    _DEFAULT_MCP_TRANSPORT = "stdio"
+    _DEFAULT_MCP_HOST = "127.0.0.1"
+    _DEFAULT_MCP_PORT = 8000
+    _DEFAULT_MCP_STREAMABLE_HTTP_PATH = "/mcp"
+    _DEFAULT_MCP_SSE_PATH = "/sse"
 
     def __new__(cls):
         if cls._instance is None:
@@ -18,6 +24,28 @@ class Config:
             cls._instance._config_file = None
             cls._instance._cached_model = None
         return cls._instance
+
+    @staticmethod
+    def _first_env(*names: str) -> str | None:
+        for name in names:
+            value = os.getenv(name)
+            if value is not None and value.strip():
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _normalize_path(path: str, default: str) -> str:
+        value = path.strip() or default
+        if not value.startswith("/"):
+            return f"/{value}"
+        return value
+
+    @staticmethod
+    def _env_bool(*names: str, default: bool = False) -> bool:
+        value = Config._first_env(*names)
+        if value is None:
+            return default
+        return value.lower() in ("true", "1", "yes", "on")
 
     @property
     def config_file(self) -> Path:
@@ -62,6 +90,54 @@ class Config:
     @property
     def retry_max_wait(self) -> int:
         return int(os.getenv("GROK_RETRY_MAX_WAIT", "10"))
+
+    @property
+    def mcp_transport(self) -> str:
+        transport = (
+            self._first_env("GROK_MCP_TRANSPORT", "MCP_TRANSPORT")
+            or self._DEFAULT_MCP_TRANSPORT
+        ).lower()
+        if transport not in {"stdio", "http", "streamable-http", "sse"}:
+            return self._DEFAULT_MCP_TRANSPORT
+        return transport
+
+    @property
+    def mcp_host(self) -> str:
+        return self._first_env("GROK_MCP_HOST", "MCP_HOST") or self._DEFAULT_MCP_HOST
+
+    @property
+    def mcp_port(self) -> int:
+        value = self._first_env("GROK_MCP_PORT", "MCP_PORT")
+        if value is None:
+            return self._DEFAULT_MCP_PORT
+        try:
+            return int(value)
+        except ValueError:
+            return self._DEFAULT_MCP_PORT
+
+    @property
+    def mcp_streamable_http_path(self) -> str:
+        value = (
+            self._first_env(
+                "GROK_MCP_STREAMABLE_HTTP_PATH",
+                "MCP_STREAMABLE_HTTP_PATH",
+            )
+            or self._DEFAULT_MCP_STREAMABLE_HTTP_PATH
+        )
+        return self._normalize_path(value, self._DEFAULT_MCP_STREAMABLE_HTTP_PATH)
+
+    @property
+    def mcp_sse_path(self) -> str:
+        value = self._first_env("GROK_MCP_SSE_PATH", "MCP_SSE_PATH") or self._DEFAULT_MCP_SSE_PATH
+        return self._normalize_path(value, self._DEFAULT_MCP_SSE_PATH)
+
+    @property
+    def mcp_stateless_http(self) -> bool:
+        return self._env_bool("GROK_MCP_STATELESS_HTTP", "MCP_STATELESS_HTTP", default=False)
+
+    @property
+    def mcp_bearer_token(self) -> str | None:
+        return self._first_env("GROK_MCP_BEARER_TOKEN", "MCP_BEARER_TOKEN")
 
     @property
     def grok_api_url(self) -> str:
@@ -186,6 +262,13 @@ class Config:
             "GROK_DEBUG": self.debug_enabled,
             "GROK_LOG_LEVEL": self.log_level,
             "GROK_LOG_DIR": str(self.log_dir),
+            "GROK_MCP_TRANSPORT": self.mcp_transport,
+            "GROK_MCP_HOST": self.mcp_host,
+            "GROK_MCP_PORT": self.mcp_port,
+            "GROK_MCP_STREAMABLE_HTTP_PATH": self.mcp_streamable_http_path,
+            "GROK_MCP_SSE_PATH": self.mcp_sse_path,
+            "GROK_MCP_STATELESS_HTTP": self.mcp_stateless_http,
+            "GROK_MCP_BEARER_TOKEN": self._mask_api_key(self.mcp_bearer_token) if self.mcp_bearer_token else "未配置",
             "TAVILY_API_URL": self.tavily_api_url,
             "TAVILY_ENABLED": self.tavily_enabled,
             "TAVILY_API_KEY": self._mask_api_key(self.tavily_api_key) if self.tavily_api_key else "未配置",
@@ -193,5 +276,6 @@ class Config:
             "FIRECRAWL_API_KEY": self._mask_api_key(self.firecrawl_api_key) if self.firecrawl_api_key else "未配置",
             "config_status": config_status
         }
+
 
 config = Config()

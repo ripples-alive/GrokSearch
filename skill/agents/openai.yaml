@@ -1,0 +1,8 @@
+interface:
+  display_name: "GrokSearch"
+  short_description: "Install and use GrokSearch as a shared remote search MCP"
+  default_prompt: "Use $grok-search to install or debug the GrokSearch skill/MCP, especially for a shared remote HTTP MCP with bearer token auth, then use GrokSearch as the default external search path."
+
+policy:
+  allow_implicit_invocation: true
+

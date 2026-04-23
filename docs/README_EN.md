@@ -74,6 +74,15 @@ If you have previously installed this project, remove the old MCP first:
 claude mcp remove grok-search
 ```
 
+### Recommended Connection Modes
+
+This project now supports two runtime modes:
+
+- local `stdio` MCP for single-machine use
+- remote HTTP MCP for team-shared deployment, optionally protected by a Bearer Token
+
+If you want to expose GrokSearch publicly for your team, prefer the remote HTTP setup below.
+
 Replace the environment variables in the following command with your own values. The Grok endpoint must be OpenAI-compatible; Tavily is optional — `web_fetch` and `web_map` will be unavailable without it.
 
 #### GuDa Users (Recommended)
@@ -137,8 +146,97 @@ You can also configure additional environment variables in the `env` field:
 | `GROK_RETRY_MAX_ATTEMPTS` | No | `3` | Max retry attempts |
 | `GROK_RETRY_MULTIPLIER` | No | `1` | Retry backoff multiplier |
 | `GROK_RETRY_MAX_WAIT` | No | `10` | Max retry wait in seconds |
+| `GROK_MCP_TRANSPORT` | No | `stdio` | MCP transport: `stdio`, `streamable-http`, or `sse` |
+| `GROK_MCP_HOST` | No | `127.0.0.1` | HTTP MCP bind host |
+| `GROK_MCP_PORT` | No | `8000` | HTTP MCP bind port |
+| `GROK_MCP_STREAMABLE_HTTP_PATH` | No | `/mcp` | Streamable HTTP path |
+| `GROK_MCP_SSE_PATH` | No | `/sse` | SSE path |
+| `GROK_MCP_STATELESS_HTTP` | No | `false` | Enable stateless HTTP mode |
+| `GROK_MCP_BEARER_TOKEN` | No | - | Bearer token for remote HTTP MCP |
 
 > **Note**: When `GUDA_API_KEY` is set, all `GROK_API_URL`/`GROK_API_KEY`/`TAVILY_*`/`FIRECRAWL_*` variables become optional as they are auto-derived from `GUDA_BASE_URL`. Explicitly set variables take higher priority.
+
+### Docker / Compose Remote Deployment
+
+If you want to expose GrokSearch as a shared remote MCP:
+
+1. Create your runtime config:
+
+```bash
+cp .env.example .env
+```
+
+2. Fill at least these values:
+
+```env
+GROK_API_URL=https://your-api-endpoint.com/v1
+GROK_API_KEY=your-grok-api-key
+MCP_TRANSPORT=streamable-http
+MCP_HOST=0.0.0.0
+MCP_PORT=8000
+MCP_STREAMABLE_HTTP_PATH=/mcp
+MCP_BEARER_TOKEN=change-this-token
+```
+
+3. Start the service:
+
+```bash
+docker compose up -d --build
+```
+
+The default remote endpoint will be:
+
+```text
+http://<your-host>:8000/mcp
+```
+
+A plain HTTP health endpoint is also available:
+
+```text
+http://<your-host>:8000/health
+```
+
+If `MCP_BEARER_TOKEN` is set, clients must send:
+
+```text
+Authorization: Bearer <your-token>
+```
+
+For verification, check health first:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Do not treat a bare `GET /mcp` as a generic readiness probe; `/mcp` is the MCP protocol endpoint, not a normal REST API.
+
+### Team Client Setup
+
+#### Codex
+
+```bash
+export GROK_SEARCH_MCP_BEARER_TOKEN=your-token
+codex mcp add grok-search \
+  --url https://search.example.com/mcp \
+  --bearer-token-env-var GROK_SEARCH_MCP_BEARER_TOKEN
+```
+
+#### Claude Code
+
+```bash
+claude mcp add \
+  --transport http \
+  --header "Authorization: Bearer YOUR_TOKEN" \
+  grok-search \
+  https://search.example.com/mcp
+```
+
+### Skill
+
+This repository now ships a Codex/Claude-oriented `skill/` bundle for shared remote access:
+
+- [../skill/README.md](../skill/README.md)
+- [../skill/SKILL.md](../skill/SKILL.md)
 
 
 ### Verify Installation

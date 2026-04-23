@@ -71,6 +71,14 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 claude mcp remove grok-search
 ```
 
+### 推荐接入方式
+
+本项目现在支持两种运行模式：
+
+- 本地 `stdio` MCP：适合单机使用，和原来的安装方式一致
+- 远程 HTTP MCP：适合团队共享部署，可加简单 Bearer Token 认证
+
+如果你要放到公网给团队统一接入，优先使用下面的远程 HTTP 方案。
 
 将以下命令中的环境变量替换为你自己的值后执行。Grok 接口需为 OpenAI 兼容格式；Tavily 为可选配置，未配置时工具 `web_fetch` 和 `web_map` 不可用。
 
@@ -137,6 +145,101 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_RETRY_MAX_ATTEMPTS` | ❌ | `3` | 最大重试次数 |
 | `GROK_RETRY_MULTIPLIER` | ❌ | `1` | 重试退避乘数 |
 | `GROK_RETRY_MAX_WAIT` | ❌ | `10` | 重试最大等待秒数 |
+| `GROK_MCP_TRANSPORT` | ❌ | `stdio` | MCP 传输方式：`stdio`、`streamable-http`、`sse` |
+| `GROK_MCP_HOST` | ❌ | `127.0.0.1` | HTTP MCP 监听地址 |
+| `GROK_MCP_PORT` | ❌ | `8000` | HTTP MCP 监听端口 |
+| `GROK_MCP_STREAMABLE_HTTP_PATH` | ❌ | `/mcp` | Streamable HTTP 路径 |
+| `GROK_MCP_SSE_PATH` | ❌ | `/sse` | SSE 路径 |
+| `GROK_MCP_STATELESS_HTTP` | ❌ | `false` | 是否启用无状态 HTTP |
+| `GROK_MCP_BEARER_TOKEN` | ❌ | - | 远程 HTTP MCP 的 Bearer Token |
+
+### Docker / Compose 远程部署
+
+如果你要把 GrokSearch 部署成团队共享的远程 MCP：
+
+1. 准备配置：
+
+```bash
+cp .env.example .env
+```
+
+2. 至少填写这些变量：
+
+```env
+GROK_API_URL=https://your-api-endpoint.com/v1
+GROK_API_KEY=your-grok-api-key
+MCP_TRANSPORT=streamable-http
+MCP_HOST=0.0.0.0
+MCP_PORT=8000
+MCP_STREAMABLE_HTTP_PATH=/mcp
+MCP_BEARER_TOKEN=change-this-token
+```
+
+3. 启动服务：
+
+```bash
+docker compose up -d --build
+```
+
+默认远程入口就是：
+
+```text
+http://<your-host>:8000/mcp
+```
+
+普通 HTTP 活性检查可用：
+
+```text
+http://<your-host>:8000/health
+```
+
+如果启用了 `MCP_BEARER_TOKEN`，客户端需要带：
+
+```text
+Authorization: Bearer <your-token>
+```
+
+验证时建议先看健康检查：
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+不要把裸 `GET /mcp` 当成业务可用性探针；`/mcp` 是 MCP 协议入口，不是普通 REST API。
+
+### 团队成员如何接入远程 MCP
+
+#### Codex
+
+```bash
+export GROK_SEARCH_MCP_BEARER_TOKEN=your-token
+codex mcp add grok-search \
+  --url https://search.example.com/mcp \
+  --bearer-token-env-var GROK_SEARCH_MCP_BEARER_TOKEN
+```
+
+#### Claude Code
+
+```bash
+claude mcp add \
+  --transport http \
+  --header "Authorization: Bearer YOUR_TOKEN" \
+  grok-search \
+  https://search.example.com/mcp
+```
+
+### Skill
+
+仓库里已附带给团队统一接入用的 `skill/`：
+
+- [skill/README.md](./skill/README.md)
+- [skill/SKILL.md](./skill/SKILL.md)
+
+本地安装到 `Codex`：
+
+```bash
+bash skill/scripts/install_codex_skill.sh
+```
 
 
 ### 验证安装

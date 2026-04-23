@@ -1,0 +1,27 @@
+services:
+  grok-search:
+    build:
+      context: .
+    image: ripples/grok-search
+    stdin_open: true
+    tty: false
+    ports:
+      - "${MCP_PORT:-8000}:${MCP_PORT:-8000}"
+    environment:
+      GROK_API_URL: ${GROK_API_URL}
+      GROK_API_KEY: ${GROK_API_KEY}
+      GROK_MODEL: ${GROK_MODEL:-grok-4-fast}
+      GROK_MCP_TRANSPORT: ${MCP_TRANSPORT:-streamable-http}
+      GROK_MCP_HOST: ${MCP_HOST:-0.0.0.0}
+      GROK_MCP_PORT: ${MCP_PORT:-8000}
+      GROK_MCP_STREAMABLE_HTTP_PATH: ${MCP_STREAMABLE_HTTP_PATH:-/mcp}
+      GROK_MCP_SSE_PATH: ${MCP_SSE_PATH:-/sse}
+      GROK_MCP_STATELESS_HTTP: ${MCP_STATELESS_HTTP:-false}
+      GROK_MCP_BEARER_TOKEN: ${MCP_BEARER_TOKEN:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      TAVILY_API_URL: ${TAVILY_API_URL:-https://api.tavily.com}
+      TAVILY_ENABLED: ${TAVILY_ENABLED:-true}
+      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:-}
+      FIRECRAWL_API_URL: ${FIRECRAWL_API_URL:-https://api.firecrawl.dev/v2}
+      GROK_DEBUG: ${GROK_DEBUG:-false}
+      GROK_LOG_LEVEL: ${GROK_LOG_LEVEL:-INFO}
