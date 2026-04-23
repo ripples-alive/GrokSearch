@@ -2,14 +2,15 @@
   "name": "GrokSearch",
   "version": "0.1.0",
   "slug": "grok-search",
-  "description": "Default OpenClaw search skill with a bundled runtime for a shared GrokSearch MCP endpoint protected by bearer token auth.",
+  "description": "OpenClaw native plugin bundle for GrokSearch MCP-backed web_search, web_fetch, and explicit GrokSearch tools over a shared remote MCP endpoint.",
   "author": "Codex",
   "license": "MIT",
   "requirements": {
     "platform": "macOS/Linux",
     "bins": [
       "bash",
-      "python3"
+      "python3",
+      "node"
     ],
     "env": [
       "GROKSEARCH_MCP_BASE_URL",
@@ -22,7 +23,8 @@
   "security": {
     "disclosures": [
       "This skill sends queries and the configured bearer token to the configured remote GrokSearch MCP endpoint.",
-      "Prefer injecting env vars through OpenClaw skill config instead of copying a .env file into the installed skill folder.",
+      "This bundle includes a native OpenClaw plugin entry plus a bundled Python wrapper so OpenClaw can register GrokSearch as tools and as web_search/web_fetch providers.",
+      "Prefer configuring plugins.entries.grok-search.config instead of copying secrets into a local .env file.",
       "The bundled installer copies local runtime files from this bundle and does not download remote code or modify other installed skills.",
       "If you point GROKSEARCH_MCP_BASE_URL or GROKSEARCH_MCP_URL at an untrusted host, that host can see your queries and token."
     ],

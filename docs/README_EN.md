@@ -242,16 +242,52 @@ This repository now ships a Codex/Claude-oriented `skill/` bundle for shared rem
 
 ### OpenClaw
 
-This repository also ships a dedicated OpenClaw bundle:
+This repository also ships a dedicated native OpenClaw plugin bundle:
 
 - [../openclaw/README.md](../openclaw/README.md)
 - [../openclaw/SKILL.md](../openclaw/SKILL.md)
 
-Install the local bundle:
+Install the local plugin:
 
 ```bash
-bash openclaw/scripts/install_openclaw_skill.sh \
-  --install-to ~/.openclaw/skills/grok-search
+openclaw plugins install /path/to/GrokSearch/openclaw
+```
+
+Recommended plugin config:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "grok-search": {
+        "enabled": true,
+        "config": {
+          "mcp": {
+            "baseUrl": "https://search.example.com",
+            "bearerToken": "your-token"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+To make OpenClaw use GrokSearch as the generic web tool provider, also set:
+
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "groksearch"
+      },
+      "fetch": {
+        "provider": "groksearch"
+      }
+    }
+  }
+}
 ```
 
 

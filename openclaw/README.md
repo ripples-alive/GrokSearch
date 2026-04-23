@@ -1,75 +1,63 @@
-# GrokSearch OpenClaw Skill
+# GrokSearch OpenClaw Plugin
 
 [Back to repo](../README.md)
 
-`openclaw/` 是给 `OpenClaw` 准备的独立 skill bundle。
+`openclaw/` 现在是一个可直接安装的 `OpenClaw` 原生插件目录，而不只是一个单独的 skill 包。
 
-这一层和 `skill/` 的区别很明确：
+这一层包含三部分：
 
-- `skill/`
-  - 主要面向 `Codex` / `Claude Code`
-- `openclaw/`
-  - 面向 `OpenClaw`
-  - 负责提供真正可安装的 OpenClaw skill bundle
+- 原生 plugin 入口
+  - `openclaw.plugin.json`
+  - `package.json`
+  - `index.js`
+- Agent 使用策略
+  - `skills/grok-search/SKILL.md`
+- 本地 MCP wrapper runtime
+  - `scripts/groksearch_openclaw.py`
+  - `runtime/groksearch/*`
 
-这个 bundle 现在自带本地 runtime，不再只是远端 MCP 连通性探测脚本。
+核心设计是：
 
-当前推荐架构是：
+- 远端只暴露统一的 GrokSearch MCP 服务
+- OpenClaw 本地安装这个 plugin
+- plugin 把远端 MCP 能力注册成 OpenClaw 原生 `tool`
+- 同时把 GrokSearch 接进 OpenClaw 的 `web_search` / `web_fetch` provider 位
 
-- 团队先部署好远程 `GrokSearch` MCP
-- OpenClaw skill 通过统一的远程 MCP URL + Bearer Token 接入
-- 本地 wrapper 再把远端 MCP 包装成 OpenClaw 可直接执行的搜索命令
+## 当前能力
+
+这个 plugin 现在会注册：
+
+- `groksearch_search`
+- `groksearch_sources`
+- `groksearch_extract`
+- `groksearch_map`
+- `groksearch_research`
+- `groksearch_config`
+- `groksearch_health`
+- `groksearch_probe`
+
+同时也注册：
+
+- `web_search` provider: `groksearch`
+- `web_fetch` provider: `groksearch`
+
+这意味着它不再只是“能探活的 skill”，而是已经能作为 OpenClaw 的原生搜索/抓取入口被调用。
 
 ## 推荐最小配置
 
-只配置下面两项即可：
-
-```env
-GROKSEARCH_MCP_BASE_URL=https://search.example.com
-GROKSEARCH_MCP_BEARER_TOKEN=your-token
-```
-
-默认远程 MCP URL 会按下面规则推导：
-
-```text
-{GROKSEARCH_MCP_BASE_URL}/mcp
-```
-
-如果你的服务路径不是 `/mcp`，可以额外设置：
-
-```env
-GROKSEARCH_MCP_URL=https://search.example.com/custom-path
-```
-
-## 安装方式
-
-复制本地 bundle：
-
-```bash
-bash openclaw/scripts/install_openclaw_skill.sh \
-  --install-to ~/.openclaw/skills/grok-search
-```
-
-这个安装器会：
-
-- 复制整个 `openclaw/` bundle
-- 带上 bundled runtime
-- 不下载远端代码
-- 不修改其他 skill
-
-安装后，优先通过 OpenClaw 的 skill env 注入配置，而不是把 secret 写进 skill 目录。
-
-推荐的 OpenClaw skill env 示例：
+推荐最小配置只有两项：
 
 ```json
 {
-  "skills": {
+  "plugins": {
     "entries": {
       "grok-search": {
         "enabled": true,
-        "env": {
-          "GROKSEARCH_MCP_BASE_URL": "https://search.example.com",
-          "GROKSEARCH_MCP_BEARER_TOKEN": "your-token"
+        "config": {
+          "mcp": {
+            "baseUrl": "https://search.example.com",
+            "bearerToken": "your-token"
+          }
         }
       }
     }
@@ -77,68 +65,143 @@ bash openclaw/scripts/install_openclaw_skill.sh \
 }
 ```
 
-## 验收
+默认 MCP URL 推导规则：
 
-先测远端入口与 runtime：
-
-```bash
-python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py health
+```text
+{baseUrl}/mcp
 ```
 
-再跑一轮搜索 smoke test：
+如果你的远端路径不是 `/mcp`，改为：
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "grok-search": {
+        "config": {
+          "mcp": {
+            "url": "https://search.example.com/custom-path",
+            "bearerToken": "your-token"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+如果你没有公开 `/health`，可以不配 `healthUrl`。只有在健康检查路径和 `/mcp` 不同且需要显式覆盖时才补这一项。
+
+## 安装方式
+
+安装本地 plugin：
 
 ```bash
-python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py search \
-  --query "OpenAI latest announcements"
+openclaw plugins install /path/to/GrokSearch/openclaw
+```
+
+OpenClaw 会读取：
+
+- `package.json`
+- `openclaw.plugin.json`
+- `skills/`
+
+并按 plugin 方式加载，而不是只把它当成普通 skill 文本。
+
+## 如何让它接管搜索位
+
+如果你要让 OpenClaw 真正把 GrokSearch 当成默认搜索台位，需要让 provider 选择也指向它。
+
+推荐：
+
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "groksearch"
+      },
+      "fetch": {
+        "provider": "groksearch"
+      }
+    }
+  }
+}
+```
+
+也就是说：
+
+- `web_search` 会走 GrokSearch provider
+- `web_fetch` 会走 GrokSearch provider
+- 额外的显式工具仍然保留，可用于 `sources`、`map`、`health`、`config`
+
+## 验收
+
+先测最小连通性：
+
+```bash
+node openclaw/scripts/test_plugin_tool.mjs probe
+```
+
+再测一轮真实搜索：
+
+```bash
+node openclaw/scripts/test_plugin_tool.mjs search \
+  '{"query":"OpenAI latest announcements"}'
 ```
 
 如果你要测正文抓取：
 
 ```bash
-python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py extract \
-  --url "https://platform.openai.com/docs/overview"
+node openclaw/scripts/test_plugin_tool.mjs extract \
+  '{"url":"https://platform.openai.com/docs/overview"}'
 ```
 
 如果你要测站点结构：
 
 ```bash
-python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py map \
-  --url "https://platform.openai.com/docs" \
-  --instructions "only documentation pages"
+node openclaw/scripts/test_plugin_tool.mjs map \
+  '{"url":"https://platform.openai.com/docs","instructions":"only documentation pages"}'
 ```
 
-如果你公网只开放了 `/mcp`，不开放 `/health`，也仍然可以单独跑：
+如果你只想直接验证 Python wrapper，也可以：
 
 ```bash
-python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py --format json probe
-```
-
-说明：
-
-- `probe` 会请求远程 MCP URL，并显示 HTTP 状态
-- MCP 协议入口不是普通 REST API，所以 `/mcp` 返回 `400` 或 `406` 也可能是正常的，只要不是连接失败或 5xx
-- 如果返回 Cloudflare 1010 / WAF 拦截，这说明远端可达，但当前出口 IP / UA 被挡了，不是本地 OpenClaw 安装失败
-- `health` 会继续尝试列出远端 MCP 工具，并读取 `get_config_info`
-- 这套 wrapper 现在提供 `health`、`search`、`extract`、`map`、`research`、`probe`
-
-## 现在能做什么
-
-这套 `openclaw/` 现在已经提供：
-
-- `health`
-- `search`
-- `extract`
-- `map`
-- `research`
-- `probe`
-
-也就是说，OpenClaw 这边不再只有健康检查，而是已经有可实际执行的搜索、正文抓取、站点结构和轻量 research 入口。
-
-## 本地调试
-
-只在本地调试这个 bundle 时，才建议：
-
-```bash
-cp openclaw/.env.example openclaw/.env
 python3 openclaw/scripts/groksearch_openclaw.py health
 ```
+
+## 关于 `probe`
+
+- `probe` 只检查 `/mcp` 连通性
+- 它不是主搜索入口
+- 对 MCP 来说，`400` / `401` / `406` 也可能表示“入口可达，但当前请求不是完整 MCP 会话”
+- 如果返回 Cloudflare 1010 / WAF 拦截，这表示远端在，但当前出口 IP / UA 被挡了，不是本地 plugin 安装失败
+
+## 兼容性说明
+
+这个 plugin 现在优先读取：
+
+- `plugins.entries.grok-search.config`
+
+同时，bundled Python runtime 仍兼容读取旧的：
+
+- `skills.entries.grok-search.env`
+
+所以已有老配置不一定需要立刻迁移，但新部署建议统一走 plugin config。
+
+## OpenClaw 应该怎么用它
+
+OpenClaw 拿到这份 plugin 后，推荐的调用层级是：
+
+- 普通网页搜索：
+  - 直接用 `web_search`
+- 普通单页提取：
+  - 直接用 `web_fetch`
+- 需要看 `session_id` 对应的完整信源：
+  - 用 `groksearch_sources`
+- 需要站点结构：
+  - 用 `groksearch_map`
+- 需要排查配置或连通性：
+  - 用 `groksearch_config`
+  - 用 `groksearch_health`
+  - 必要时用 `groksearch_probe`

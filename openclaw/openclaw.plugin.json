@@ -1,0 +1,177 @@
+{
+  "id": "grok-search",
+  "skills": [
+    "./skills"
+  ],
+  "providerAuthEnvVars": {
+    "groksearch": [
+      "GROKSEARCH_MCP_BEARER_TOKEN"
+    ]
+  },
+  "uiHints": {
+    "mcp.baseUrl": {
+      "label": "GrokSearch MCP Base URL",
+      "help": "Base URL for the remote GrokSearch deployment. /mcp is derived automatically when mcp.url is unset."
+    },
+    "mcp.url": {
+      "label": "GrokSearch MCP URL",
+      "help": "Explicit remote MCP URL override when the endpoint is not served at /mcp."
+    },
+    "mcp.healthUrl": {
+      "label": "GrokSearch Health URL",
+      "help": "Optional health URL override. Leave empty if the remote deployment does not expose /health publicly."
+    },
+    "mcp.bearerToken": {
+      "label": "GrokSearch Bearer Token",
+      "help": "Bearer token for the remote GrokSearch MCP endpoint. Supports SecretRef objects.",
+      "sensitive": true,
+      "placeholder": "Bearer token"
+    },
+    "mcp.httpUserAgent": {
+      "label": "HTTP User-Agent",
+      "help": "Optional User-Agent override for MCP probe and tool calls."
+    },
+    "mcp.toolTimeoutSeconds": {
+      "label": "Tool Timeout Seconds",
+      "help": "Timeout for remote MCP tool calls."
+    },
+    "mcp.verifyTimeoutSeconds": {
+      "label": "Verify Timeout Seconds",
+      "help": "Timeout for MCP probe and health verification requests."
+    },
+    "defaults.search.platform": {
+      "label": "Default Search Platform",
+      "help": "Optional default platform hint for GrokSearch search requests."
+    },
+    "defaults.search.model": {
+      "label": "Default Search Model",
+      "help": "Optional default Grok model override for GrokSearch search requests."
+    },
+    "defaults.search.extraSources": {
+      "label": "Default Extra Sources",
+      "help": "Default extra source fan-out for GrokSearch search requests."
+    },
+    "defaults.map.maxDepth": {
+      "label": "Default Map Max Depth",
+      "help": "Default maximum crawl depth for groksearch_map."
+    },
+    "defaults.map.maxBreadth": {
+      "label": "Default Map Max Breadth",
+      "help": "Default breadth per level for groksearch_map."
+    },
+    "defaults.map.limit": {
+      "label": "Default Map Result Limit",
+      "help": "Default result limit for groksearch_map."
+    },
+    "defaults.map.timeout": {
+      "label": "Default Map Timeout",
+      "help": "Default timeout for groksearch_map."
+    },
+    "defaults.research.extraSources": {
+      "label": "Default Research Extra Sources",
+      "help": "Default extra source fan-out for groksearch_research."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": [
+      "groksearch"
+    ],
+    "webFetchProviders": [
+      "groksearch"
+    ],
+    "tools": [
+      "groksearch_search",
+      "groksearch_sources",
+      "groksearch_extract",
+      "groksearch_map",
+      "groksearch_research",
+      "groksearch_config",
+      "groksearch_health",
+      "groksearch_probe"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mcp": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "healthUrl": {
+            "type": "string"
+          },
+          "bearerToken": {
+            "type": [
+              "string",
+              "object"
+            ]
+          },
+          "httpUserAgent": {
+            "type": "string"
+          },
+          "toolTimeoutSeconds": {
+            "type": "number"
+          },
+          "verifyTimeoutSeconds": {
+            "type": "number"
+          }
+        }
+      },
+      "defaults": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "search": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "platform": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "extraSources": {
+                "type": "number"
+              }
+            }
+          },
+          "map": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "maxDepth": {
+                "type": "number"
+              },
+              "maxBreadth": {
+                "type": "number"
+              },
+              "limit": {
+                "type": "number"
+              },
+              "timeout": {
+                "type": "number"
+              }
+            }
+          },
+          "research": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "extraSources": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

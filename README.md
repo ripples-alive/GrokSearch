@@ -261,29 +261,30 @@ bash skill/scripts/install_codex_skill.sh
 
 ### OpenClaw
 
-仓库里也已附带 `OpenClaw` 用的独立 bundle：
+仓库里也已附带 `OpenClaw` 用的独立原生 plugin bundle：
 
 - [openclaw/README.md](./openclaw/README.md)
 - [openclaw/SKILL.md](./openclaw/SKILL.md)
 
-本地安装 bundle：
+本地安装 plugin：
 
 ```bash
-bash openclaw/scripts/install_openclaw_skill.sh \
-  --install-to ~/.openclaw/skills/grok-search
+openclaw plugins install /path/to/GrokSearch/openclaw
 ```
 
-推荐通过 OpenClaw skill env 注入：
+推荐通过 OpenClaw plugin config 注入：
 
 ```json
 {
-  "skills": {
+  "plugins": {
     "entries": {
       "grok-search": {
         "enabled": true,
-        "env": {
-          "GROKSEARCH_MCP_BASE_URL": "https://search.example.com",
-          "GROKSEARCH_MCP_BEARER_TOKEN": "your-token"
+        "config": {
+          "mcp": {
+            "baseUrl": "https://search.example.com",
+            "bearerToken": "your-token"
+          }
         }
       }
     }
@@ -291,10 +292,28 @@ bash openclaw/scripts/install_openclaw_skill.sh \
 }
 ```
 
-验收：
+如果你要让 OpenClaw 直接把它当成默认搜索/抓取台位，再补：
+
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "groksearch"
+      },
+      "fetch": {
+        "provider": "groksearch"
+      }
+    }
+  }
+}
+```
+
+验收建议：
 
 ```bash
-python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py probe
+node openclaw/scripts/test_plugin_tool.mjs probe
+node openclaw/scripts/test_plugin_tool.mjs search '{"query":"OpenAI latest announcements"}'
 ```
 
 ### GitHub Image Build

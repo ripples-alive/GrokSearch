@@ -1,0 +1,15 @@
+{
+  "name": "@gudastudio/openclaw-grok-search",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw plugin for GrokSearch MCP-backed web search and extraction",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.28"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

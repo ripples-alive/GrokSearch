@@ -107,6 +107,22 @@ def _render_search(payload: dict[str, object]) -> str:
     return "\n".join(lines).strip()
 
 
+def _render_sources(payload: dict[str, object]) -> str:
+    lines = [
+        "# GrokSearch Sources",
+        "",
+        f"- session_id: `{payload.get('session_id', '')}`",
+        f"- sources_count: `{payload.get('sources_count', 0)}`",
+        "",
+    ]
+    sources = payload.get("sources")
+    if isinstance(sources, list):
+        lines.extend(_result_lines([item for item in sources if isinstance(item, dict)], "## Sources"))
+    if payload.get("error"):
+        lines.extend(["## Error", "", str(payload["error"]), ""])
+    return "\n".join(lines).strip()
+
+
 def _render_extract(payload: dict[str, object]) -> str:
     return "\n".join(
         [
@@ -134,6 +150,19 @@ def _render_map(payload: dict[str, object]) -> str:
         lines.extend(_result_lines([item for item in results if isinstance(item, dict)], "## Results"))
     elif payload.get("raw"):
         lines.extend(["## Raw", "", str(payload["raw"]), ""])
+    return "\n".join(lines).strip()
+
+
+def _render_config(payload: dict[str, object]) -> str:
+    lines = [
+        "# GrokSearch Config",
+        "",
+    ]
+    for key, value in payload.items():
+        if isinstance(value, (dict, list)):
+            lines.extend([f"## {key}", "", json.dumps(value, ensure_ascii=False, indent=2), ""])
+        else:
+            lines.append(f"- {key}: {value}")
     return "\n".join(lines).strip()
 
 
@@ -198,6 +227,11 @@ def main() -> int:
     sub.add_parser("probe")
     sub.add_parser("health")
 
+    sources_parser = sub.add_parser("sources", help="Get sources from a previous search session")
+    sources_parser.add_argument("--session-id", required=True)
+
+    sub.add_parser("config", help="Show remote GrokSearch config info")
+
     search_parser = sub.add_parser("search", help="Run a GrokSearch web search")
     search_parser.add_argument("--query", required=True)
     search_parser.add_argument("--platform", default="")
@@ -238,6 +272,14 @@ def main() -> int:
             payload = client.health_sync()
             _emit(payload, fmt=args.format, renderer=_render_health)
             return 0 if payload.get("probe", {}).get("ok") else 1
+        if args.command == "sources":
+            payload = client.get_sources(session_id=args.session_id)
+            _emit(payload, fmt=args.format, renderer=_render_sources)
+            return 0
+        if args.command == "config":
+            payload = client.get_config_info_sync()
+            _emit(payload, fmt=args.format, renderer=_render_config)
+            return 0
         if args.command == "search":
             payload = client.search_sync(
                 query=args.query,

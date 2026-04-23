@@ -36,7 +36,24 @@ def _load_mapping_env(raw_env: dict[str, object]) -> None:
             os.environ.setdefault(key, cleaned)
 
 
-def _load_openclaw_skill_env() -> None:
+def _apply_plugin_config(raw_plugin_config: dict[str, object]) -> None:
+    mcp = raw_plugin_config.get("mcp") if isinstance(raw_plugin_config.get("mcp"), dict) else {}
+    mapping = {
+        "GROKSEARCH_MCP_BASE_URL": mcp.get("baseUrl"),
+        "GROKSEARCH_MCP_URL": mcp.get("url"),
+        "GROKSEARCH_HEALTH_URL": mcp.get("healthUrl"),
+        "GROKSEARCH_MCP_BEARER_TOKEN": mcp.get("bearerToken"),
+        "GROKSEARCH_HTTP_USER_AGENT": mcp.get("httpUserAgent"),
+    }
+    _load_mapping_env(mapping)
+
+    if isinstance(mcp.get("toolTimeoutSeconds"), (int, float)):
+        os.environ.setdefault("GROKSEARCH_TOOL_TIMEOUT_SECONDS", str(mcp["toolTimeoutSeconds"]))
+    if isinstance(mcp.get("verifyTimeoutSeconds"), (int, float)):
+        os.environ.setdefault("GROKSEARCH_VERIFY_TIMEOUT_SECONDS", str(mcp["verifyTimeoutSeconds"]))
+
+
+def _load_openclaw_runtime_config() -> None:
     candidates: list[Path] = []
     explicit = os.getenv("OPENCLAW_CONFIG_PATH", "").strip()
     if explicit:
@@ -52,14 +69,18 @@ def _load_openclaw_skill_env() -> None:
             config = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
+
+        plugin_config = (((config.get("plugins") or {}).get("entries") or {}).get("grok-search") or {}).get("config") or {}
+        if isinstance(plugin_config, dict):
+            _apply_plugin_config(plugin_config)
+
         env = (((config.get("skills") or {}).get("entries") or {}).get("grok-search") or {}).get("env") or {}
         if isinstance(env, dict):
             _load_mapping_env(env)
-            return
 
 
 def _bootstrap_runtime_env() -> None:
-    _load_openclaw_skill_env()
+    _load_openclaw_runtime_config()
     _load_env_file(ROOT_DIR / ".env")
     _load_env_file(ROOT_DIR / "runtime" / ".env")
 

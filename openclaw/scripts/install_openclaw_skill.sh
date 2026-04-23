@@ -9,11 +9,12 @@ usage() {
   cat <<'EOF'
 Usage: install_openclaw_skill.sh [options]
 
-Prepare the bundled GrokSearch OpenClaw skill for local use.
-This installer copies the bundled runtime and does not download remote code.
+Copy the GrokSearch OpenClaw plugin bundle to another local directory.
+This is only a compatibility helper for local staging or debugging.
+Preferred installation path: `openclaw plugins install /path/to/GrokSearch/openclaw`
 
 Options:
-  --install-to DIR   Copy the skill bundle into DIR
+  --install-to DIR   Copy the plugin bundle into DIR
   --copy-env FILE    Copy FILE to target .env with 0600 permissions
   -h, --help         Show this help
 EOF
@@ -67,17 +68,19 @@ copy_skill_bundle
 prepare_env_file
 
 cat <<EOF
-GrokSearch OpenClaw skill is ready at: $TARGET_DIR
+GrokSearch OpenClaw plugin bundle is ready at: $TARGET_DIR
 
 What changed:
-1. Runtime is bundled inside the skill package
+1. Runtime is bundled inside the plugin package
 2. No remote downloads were performed
-3. No other installed skills were modified
+3. No other installed plugins or skills were modified
 
 Next steps:
-1. Prefer injecting env via OpenClaw skill config
-2. Minimal setup: GROKSEARCH_MCP_BASE_URL + GROKSEARCH_MCP_BEARER_TOKEN
-3. Optional: GROKSEARCH_MCP_URL if your MCP path is not /mcp
-4. Run: python3 $TARGET_DIR/scripts/groksearch_openclaw.py health
-5. Run: python3 $TARGET_DIR/scripts/groksearch_openclaw.py search --query "OpenAI latest announcements"
+1. Prefer: openclaw plugins install $TARGET_DIR
+2. Prefer configuring plugins.entries.grok-search.config
+3. Minimal setup: GROKSEARCH_MCP_BASE_URL + GROKSEARCH_MCP_BEARER_TOKEN
+4. Optional: GROKSEARCH_MCP_URL if your MCP path is not /mcp
+5. Run: node $TARGET_DIR/scripts/test_plugin_tool.mjs probe
+6. Run: node $TARGET_DIR/scripts/test_plugin_tool.mjs search '{"query":"OpenAI latest announcements"}'
+7. Direct wrapper fallback: python3 $TARGET_DIR/scripts/groksearch_openclaw.py health
 EOF
