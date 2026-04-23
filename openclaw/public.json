@@ -2,7 +2,7 @@
   "name": "GrokSearch",
   "version": "0.1.0",
   "slug": "grok-search",
-  "description": "Remote OpenClaw search skill for a shared GrokSearch MCP endpoint protected by bearer token auth.",
+  "description": "Default OpenClaw search skill with a bundled runtime for a shared GrokSearch MCP endpoint protected by bearer token auth.",
   "author": "Codex",
   "license": "MIT",
   "requirements": {
@@ -23,10 +23,9 @@
     "disclosures": [
       "This skill sends queries and the configured bearer token to the configured remote GrokSearch MCP endpoint.",
       "Prefer injecting env vars through OpenClaw skill config instead of copying a .env file into the installed skill folder.",
-      "The bundled installer only copies local files from this bundle and does not download remote code or modify other installed skills.",
+      "The bundled installer copies local runtime files from this bundle and does not download remote code or modify other installed skills.",
       "If you point GROKSEARCH_MCP_BASE_URL or GROKSEARCH_MCP_URL at an untrusted host, that host can see your queries and token."
     ],
     "install_requires_confirmation": true
   }
 }
-

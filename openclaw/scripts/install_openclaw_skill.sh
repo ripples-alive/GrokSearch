@@ -10,6 +10,7 @@ usage() {
 Usage: install_openclaw_skill.sh [options]
 
 Prepare the bundled GrokSearch OpenClaw skill for local use.
+This installer copies the bundled runtime and does not download remote code.
 
 Options:
   --install-to DIR   Copy the skill bundle into DIR
@@ -68,9 +69,15 @@ prepare_env_file
 cat <<EOF
 GrokSearch OpenClaw skill is ready at: $TARGET_DIR
 
+What changed:
+1. Runtime is bundled inside the skill package
+2. No remote downloads were performed
+3. No other installed skills were modified
+
 Next steps:
 1. Prefer injecting env via OpenClaw skill config
 2. Minimal setup: GROKSEARCH_MCP_BASE_URL + GROKSEARCH_MCP_BEARER_TOKEN
 3. Optional: GROKSEARCH_MCP_URL if your MCP path is not /mcp
-4. Run: python3 $TARGET_DIR/scripts/groksearch_openclaw.py probe
+4. Run: python3 $TARGET_DIR/scripts/groksearch_openclaw.py health
+5. Run: python3 $TARGET_DIR/scripts/groksearch_openclaw.py search --query "OpenAI latest announcements"
 EOF
