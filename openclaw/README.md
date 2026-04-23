@@ -138,28 +138,34 @@ OpenClaw 会读取：
 先测最小连通性：
 
 ```bash
-node openclaw/scripts/test_plugin_tool.mjs probe
+node openclaw/scripts/test_plugin_tool.mjs \
+  probe \
+  '{}' \
+  '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'
 ```
 
 再测一轮真实搜索：
 
 ```bash
 node openclaw/scripts/test_plugin_tool.mjs search \
-  '{"query":"OpenAI latest announcements"}'
+  '{"query":"OpenAI latest announcements"}' \
+  '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'
 ```
 
 如果你要测正文抓取：
 
 ```bash
 node openclaw/scripts/test_plugin_tool.mjs extract \
-  '{"url":"https://platform.openai.com/docs/overview"}'
+  '{"url":"https://platform.openai.com/docs/overview"}' \
+  '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'
 ```
 
 如果你要测站点结构：
 
 ```bash
 node openclaw/scripts/test_plugin_tool.mjs map \
-  '{"url":"https://platform.openai.com/docs","instructions":"only documentation pages"}'
+  '{"url":"https://platform.openai.com/docs","instructions":"only documentation pages"}' \
+  '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'
 ```
 
 如果你还想用附带的 Python 脚本单独验证远端 MCP，也可以：
@@ -206,6 +212,6 @@ OpenClaw 拿到这份 plugin 后，推荐的调用层级是：
 
 如果是安装排障或公网 MCP 可达性验证，交给运维脚本：
 
-- `node openclaw/scripts/test_plugin_tool.mjs probe`
-- `node openclaw/scripts/test_plugin_tool.mjs health`
+- `node openclaw/scripts/test_plugin_tool.mjs probe '{}' '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'`
+- `node openclaw/scripts/test_plugin_tool.mjs health '{}' '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'`
 - `python3 openclaw/scripts/groksearch_openclaw.py config`

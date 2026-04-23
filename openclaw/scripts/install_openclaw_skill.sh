@@ -77,10 +77,10 @@ What changed:
 
 Next steps:
 1. Prefer: openclaw plugins install $TARGET_DIR
-2. Prefer configuring plugins.entries.grok-search.config
-3. Minimal setup: GROKSEARCH_MCP_BASE_URL + GROKSEARCH_MCP_BEARER_TOKEN
-4. Optional: GROKSEARCH_MCP_URL if your MCP path is not /mcp
-5. Run: node $TARGET_DIR/scripts/test_plugin_tool.mjs probe
-6. Run: node $TARGET_DIR/scripts/test_plugin_tool.mjs search '{"query":"OpenAI latest announcements"}'
-7. Optional diagnostic fallback: python3 $TARGET_DIR/scripts/groksearch_openclaw.py health
+2. Configure plugins.entries.grok-search.config.mcp.baseUrl or mcp.url
+3. Configure plugins.entries.grok-search.config.mcp.bearerToken
+4. Optional: set mcp.healthUrl if health is not served next to /mcp
+5. Run a plugin-backed probe from OpenClaw after config is loaded
+6. Run a plugin-backed search from OpenClaw after config is loaded
+7. Optional legacy diagnostic fallback: python3 $TARGET_DIR/scripts/groksearch_openclaw.py health
 EOF

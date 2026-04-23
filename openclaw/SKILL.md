@@ -95,8 +95,14 @@ Legacy `skills.entries.grok-search.env` is still read by the bundled diagnostic 
 Recommended smoke tests after install:
 
 ```bash
-node {baseDir}/scripts/test_plugin_tool.mjs probe
-node {baseDir}/scripts/test_plugin_tool.mjs search '{"query":"OpenAI latest announcements"}'
+node {baseDir}/scripts/test_plugin_tool.mjs \
+  probe \
+  '{}' \
+  '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'
+node {baseDir}/scripts/test_plugin_tool.mjs \
+  search \
+  '{"query":"OpenAI latest announcements"}' \
+  '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'
 ```
 
 If you want to bypass the JS plugin layer and use the optional diagnostic script directly:

@@ -2,6 +2,8 @@ export const PLUGIN_ID = "grok-search";
 export const PROVIDER_ID = "groksearch";
 export const DEFAULT_HTTP_USER_AGENT = "GrokSearch-OpenClaw/0.3";
 const DEFAULT_PROTOCOL_VERSION = "2025-11-25";
+const DEFAULT_RESEARCH_PAGE_LIMIT = 3;
+const DEFAULT_RESEARCH_EXCERPT_CHARS = 1200;
 
 function asRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -45,16 +47,6 @@ export function normalizeInteger(value) {
   return number === undefined ? undefined : Math.trunc(number);
 }
 
-function getEnvString(name, fallback = "") {
-  const value = process.env[name];
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
-}
-
-function getEnvNumber(name, fallback) {
-  const parsed = parseMaybeNumber(process.env[name]);
-  return parsed === undefined ? fallback : parsed;
-}
-
 function deriveHealthUrl(mcpUrl) {
   const trimmed = normalizeString(mcpUrl).replace(/\/+$/, "");
   if (!trimmed) {
@@ -65,14 +57,14 @@ function deriveHealthUrl(mcpUrl) {
 }
 
 function resolveMcpUrl(mcp) {
-  const explicit = normalizeString(mcp.url) || getEnvString("GROKSEARCH_MCP_URL");
+  const explicit = normalizeString(mcp.url);
   if (explicit) {
     return explicit.replace(/\/+$/, "");
   }
 
-  const baseUrl = normalizeString(mcp.baseUrl) || getEnvString("GROKSEARCH_MCP_BASE_URL");
+  const baseUrl = normalizeString(mcp.baseUrl);
   if (!baseUrl) {
-    throw new Error("GROKSEARCH_MCP_BASE_URL or GROKSEARCH_MCP_URL is required");
+    throw new Error("plugins.entries.grok-search.config.mcp.baseUrl or mcp.url is required");
   }
   return `${baseUrl.replace(/\/+$/, "")}/mcp`;
 }
@@ -82,25 +74,27 @@ function resolveRuntimeSettings(pluginConfig = {}, bearerToken = "") {
   const mcpUrl = resolveMcpUrl(mcp);
   const healthUrl =
     normalizeString(mcp.healthUrl) ||
-    getEnvString("GROKSEARCH_HEALTH_URL") ||
     deriveHealthUrl(mcpUrl);
 
   return {
     mcpUrl,
     healthUrl: healthUrl.replace(/\/+$/, ""),
-    bearerToken: normalizeString(bearerToken) || getEnvString("GROKSEARCH_MCP_BEARER_TOKEN"),
+    bearerToken: normalizeString(bearerToken),
     httpUserAgent:
       normalizeString(mcp.httpUserAgent) ||
-      getEnvString("GROKSEARCH_HTTP_USER_AGENT") ||
       DEFAULT_HTTP_USER_AGENT,
     toolTimeoutSeconds:
       parseMaybeNumber(mcp.toolTimeoutSeconds) ??
-      getEnvNumber("GROKSEARCH_TOOL_TIMEOUT_SECONDS", 120),
+      120,
     verifyTimeoutSeconds:
       parseMaybeNumber(mcp.verifyTimeoutSeconds) ??
-      getEnvNumber("GROKSEARCH_VERIFY_TIMEOUT_SECONDS", 10),
-    researchPageLimit: getEnvNumber("GROKSEARCH_RESEARCH_PAGE_LIMIT", 3),
-    researchExcerptChars: getEnvNumber("GROKSEARCH_RESEARCH_EXCERPT_CHARS", 1200),
+      10,
+    researchPageLimit:
+      parseMaybeNumber(pluginConfig.researchPageLimit) ??
+      DEFAULT_RESEARCH_PAGE_LIMIT,
+    researchExcerptChars:
+      parseMaybeNumber(pluginConfig.researchExcerptChars) ??
+      DEFAULT_RESEARCH_EXCERPT_CHARS,
   };
 }
 

@@ -3,11 +3,6 @@
   "skills": [
     "./skills"
   ],
-  "providerAuthEnvVars": {
-    "groksearch": [
-      "GROKSEARCH_MCP_BEARER_TOKEN"
-    ]
-  },
   "uiHints": {
     "mcp.baseUrl": {
       "label": "GrokSearch MCP Base URL",

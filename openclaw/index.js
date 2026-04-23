@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { wrapExternalContent } from "openclaw/plugin-sdk/provider-web-fetch";
 import {
-  resolveConfiguredSecretInputWithFallback,
+  resolveConfiguredSecretInputString,
   resolvePluginConfigObject,
 } from "openclaw/plugin-sdk/config-runtime";
 import { Type } from "typebox";
@@ -110,12 +110,11 @@ function toolErrorResult(message, details = {}) {
 async function resolvePluginRuntimeConfig(config) {
   const safeConfig = config ?? {};
   const pluginConfig = resolvePluginConfigObject(safeConfig, PLUGIN_ID) ?? resolvePluginConfig(safeConfig);
-  const bearer = await resolveConfiguredSecretInputWithFallback({
+  const bearer = await resolveConfiguredSecretInputString({
     config: safeConfig,
     env: process.env,
     value: pluginConfig?.mcp?.bearerToken,
     path: "plugins.entries.grok-search.config.mcp.bearerToken",
-    readFallback: () => process.env.GROKSEARCH_MCP_BEARER_TOKEN,
   });
 
   return {
@@ -266,7 +265,6 @@ function createSearchProvider() {
     hint: "Shared remote MCP-backed web search with Grok answers and source retrieval.",
     requiresCredential: false,
     credentialLabel: "GrokSearch bearer token",
-    envVars: ["GROKSEARCH_MCP_BEARER_TOKEN"],
     placeholder: "Bearer token",
     signupUrl: "https://github.com/GuDaStudio/GrokSearch",
     docsUrl: "https://github.com/GuDaStudio/GrokSearch/tree/main/openclaw",
@@ -318,7 +316,6 @@ function createFetchProvider() {
     hint: "Fetch page text through the shared GrokSearch MCP endpoint.",
     requiresCredential: false,
     credentialLabel: "GrokSearch bearer token",
-    envVars: ["GROKSEARCH_MCP_BEARER_TOKEN"],
     placeholder: "Bearer token",
     signupUrl: "https://github.com/GuDaStudio/GrokSearch",
     docsUrl: "https://github.com/GuDaStudio/GrokSearch/tree/main/openclaw",
