@@ -17,10 +17,12 @@ This directory is an OpenClaw plugin bundle, not only a plain skill bundle.
   - Plugin package metadata and runtime dependencies
 - `index.js`
   - Native plugin entry that registers tools and web providers
+- `plugin-runtime.js`
+  - Pure-JS MCP runtime used by the plugin itself
 - `skills/grok-search/SKILL.md`
   - Agent-facing usage policy for the registered tools/providers
 - `scripts/groksearch_openclaw.py`
-  - Local Python wrapper that talks to the remote GrokSearch MCP endpoint
+  - Optional local diagnostic script for the remote GrokSearch MCP endpoint
 
 ## What This Bundle Enables
 
@@ -86,7 +88,7 @@ If the MCP endpoint is not served at `/mcp`, set:
 }
 ```
 
-Legacy `skills.entries.grok-search.env` is still read by the bundled Python runtime for backwards compatibility, but plugin config is the preferred path.
+Legacy `skills.entries.grok-search.env` is still read by the bundled diagnostic runtime for backwards compatibility, but plugin config is the preferred path.
 
 ## Validation
 
@@ -97,7 +99,7 @@ node {baseDir}/scripts/test_plugin_tool.mjs probe
 node {baseDir}/scripts/test_plugin_tool.mjs search '{"query":"OpenAI latest announcements"}'
 ```
 
-If you want to bypass the JS plugin layer and test the wrapper directly:
+If you want to bypass the JS plugin layer and use the optional diagnostic script directly:
 
 ```bash
 python3 {baseDir}/scripts/groksearch_openclaw.py health

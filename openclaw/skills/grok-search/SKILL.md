@@ -46,5 +46,5 @@ Use GrokSearch as the default external search stack in OpenClaw when the `grok-s
 ## Usage Notes
 
 - `web_search` and `web_fetch` are the right default choices once `tools.web.search.provider` or `tools.web.fetch.provider` is set to `groksearch`.
-- Operator diagnostics stay in the local wrapper scripts, not in the public agent tool surface.
+- Operator diagnostics stay in local diagnostic scripts, not in the public agent tool surface.
 - For install verification or remote MCP troubleshooting, use `node openclaw/scripts/test_plugin_tool.mjs probe|health` or `python3 openclaw/scripts/groksearch_openclaw.py config`.

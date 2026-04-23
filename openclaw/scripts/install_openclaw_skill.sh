@@ -82,5 +82,5 @@ Next steps:
 4. Optional: GROKSEARCH_MCP_URL if your MCP path is not /mcp
 5. Run: node $TARGET_DIR/scripts/test_plugin_tool.mjs probe
 6. Run: node $TARGET_DIR/scripts/test_plugin_tool.mjs search '{"query":"OpenAI latest announcements"}'
-7. Direct wrapper fallback: python3 $TARGET_DIR/scripts/groksearch_openclaw.py health
+7. Optional diagnostic fallback: python3 $TARGET_DIR/scripts/groksearch_openclaw.py health
 EOF

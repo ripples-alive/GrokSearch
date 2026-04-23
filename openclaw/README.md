@@ -10,9 +10,10 @@
   - `openclaw.plugin.json`
   - `package.json`
   - `index.js`
+  - `plugin-runtime.js`
 - Agent 使用策略
   - `skills/grok-search/SKILL.md`
-- 本地 MCP wrapper runtime
+- 可选运维脚本
   - `scripts/groksearch_openclaw.py`
   - `runtime/groksearch/*`
 
@@ -161,7 +162,7 @@ node openclaw/scripts/test_plugin_tool.mjs map \
   '{"url":"https://platform.openai.com/docs","instructions":"only documentation pages"}'
 ```
 
-如果你只想直接验证 Python wrapper，也可以：
+如果你还想用附带的 Python 脚本单独验证远端 MCP，也可以：
 
 ```bash
 python3 openclaw/scripts/groksearch_openclaw.py health
@@ -182,7 +183,7 @@ python3 openclaw/scripts/groksearch_openclaw.py health
 
 - `plugins.entries.grok-search.config`
 
-同时，bundled Python runtime 仍兼容读取旧的：
+同时，附带的 Python 诊断脚本仍兼容读取旧的：
 
 - `skills.entries.grok-search.env`
 
