@@ -190,25 +190,27 @@ The default remote endpoint will be:
 http://<your-host>:8000/mcp
 ```
 
-A plain HTTP health endpoint is also available:
-
-```text
-http://<your-host>:8000/health
-```
-
 If `MCP_BEARER_TOKEN` is set, clients must send:
 
 ```text
 Authorization: Bearer <your-token>
 ```
 
-For verification, check health first:
+If you choose to expose a plain health endpoint too, you may still use:
 
 ```bash
 curl http://127.0.0.1:8000/health
 ```
 
-Do not treat a bare `GET /mcp` as a generic readiness probe; `/mcp` is the MCP protocol endpoint, not a normal REST API.
+If you only want to expose the MCP 1.0 endpoint publicly, expose `/mcp` only and skip `/health`.
+
+For public verification, probe `/mcp` directly:
+
+```bash
+curl -i -H 'Accept: text/event-stream' http://127.0.0.1:8000/mcp
+```
+
+For streamable HTTP, `400` / `401` / `406` can still mean the endpoint is reachable but the request is not a full MCP session yet.
 
 ### Team Client Setup
 

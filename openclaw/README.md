@@ -69,13 +69,7 @@ bash openclaw/scripts/install_openclaw_skill.sh \
 
 ## 验收
 
-优先先跑健康检查：
-
-```bash
-python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py health
-```
-
-如果要检查 MCP endpoint 探测：
+如果你的公网只开放了 MCP 入口，不开放 `/health`，直接跑：
 
 ```bash
 python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py probe
@@ -83,9 +77,15 @@ python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py probe
 
 说明：
 
-- `health` 会请求 `GET /health`
 - `probe` 会请求远程 MCP URL，并显示 HTTP 状态
 - MCP 协议入口不是普通 REST API，所以 `/mcp` 返回 `400` 或 `406` 也可能是正常的，只要不是连接失败或 5xx
+- 如果返回 Cloudflare 1010 / WAF 拦截，这说明远端可达，但当前出口 IP / UA 被挡了，不是本地 OpenClaw 安装失败
+
+只有在你额外开放了 `/health` 时，才再跑：
+
+```bash
+python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py health
+```
 
 ## 本地调试
 
@@ -93,6 +93,5 @@ python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py probe
 
 ```bash
 cp openclaw/.env.example openclaw/.env
-python3 openclaw/scripts/groksearch_openclaw.py health
+python3 openclaw/scripts/groksearch_openclaw.py probe
 ```
-

@@ -86,19 +86,20 @@ bash {baseDir}/scripts/install_openclaw_skill.sh --install-to ~/.openclaw/skills
 
 ## 验收顺序
 
-1. 先跑健康检查：
-
-```bash
-python3 {baseDir}/scripts/groksearch_openclaw.py health
-```
-
-2. 再跑 MCP endpoint 探测：
+1. 如果公网只开放了 `/mcp`，先跑 MCP endpoint 探测：
 
 ```bash
 python3 {baseDir}/scripts/groksearch_openclaw.py probe
 ```
 
-3. 如果远程服务健康，再让 OpenClaw 通过配置好的 MCP 调实际搜索。
+2. 如果你另外开放了 `/health`，再跑：
+
+```bash
+python3 {baseDir}/scripts/groksearch_openclaw.py health
+```
+
+3. 如果返回 `400` / `401` / `406`，说明远程 MCP 入口基本可达，再让 OpenClaw 通过配置好的 MCP 调实际搜索。
+4. 如果返回 Cloudflare 1010 / WAF 拦截，说明远端把当前出口 IP / UA 挡掉了，不是本地安装失败。
 
 ## GrokSearch-First 规则
 
@@ -107,4 +108,3 @@ python3 {baseDir}/scripts/groksearch_openclaw.py probe
 - 外部搜索优先走 GrokSearch
 - 官方文档、网页正文、站点结构优先继续用 GrokSearch，不要先切回别的搜索栈
 - 只有远程 endpoint 不可达、认证失败或用户明确要求时，才回退到别的搜索方式
-

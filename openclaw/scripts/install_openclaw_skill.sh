@@ -72,6 +72,5 @@ Next steps:
 1. Prefer injecting env via OpenClaw skill config
 2. Minimal setup: GROKSEARCH_MCP_BASE_URL + GROKSEARCH_MCP_BEARER_TOKEN
 3. Optional: GROKSEARCH_MCP_URL if your MCP path is not /mcp
-4. Run: python3 $TARGET_DIR/scripts/groksearch_openclaw.py health
+4. Run: python3 $TARGET_DIR/scripts/groksearch_openclaw.py probe
 EOF
-

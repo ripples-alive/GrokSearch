@@ -84,13 +84,27 @@ def _health_url() -> str:
 
 
 def _headers(include_sse: bool = False) -> dict[str, str]:
-    headers = {}
+    headers = {
+        "User-Agent": os.getenv("GROKSEARCH_HTTP_USER_AGENT", "GrokSearch-OpenClaw/0.1").strip() or "GrokSearch-OpenClaw/0.1"
+    }
     token = os.getenv("GROKSEARCH_MCP_BEARER_TOKEN", "").strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if include_sse:
         headers["Accept"] = "text/event-stream"
     return headers
+
+
+def _waf_note(status: int, body: str) -> str | None:
+    body_lower = body.lower()
+    if status == 403 and "cloudflare" in body_lower and "1010" in body_lower:
+        return (
+            "remote endpoint is reachable but blocked by Cloudflare/WAF "
+            "(error 1010). This is not a local OpenClaw install failure."
+        )
+    if status == 403 and "cloudflare" in body_lower:
+        return "remote endpoint is reachable but blocked by Cloudflare/WAF."
+    return None
 
 
 def _request(url: str, headers: dict[str, str]) -> tuple[int, str]:
@@ -108,14 +122,27 @@ def _request(url: str, headers: dict[str, str]) -> tuple[int, str]:
 def cmd_health() -> int:
     url = _health_url()
     status, body = _request(url, _headers())
-    print(json.dumps({"url": url, "status_code": status, "body": body}, ensure_ascii=False, indent=2))
+    payload = {"url": url, "status_code": status, "body": body}
+    note = _waf_note(status, body)
+    if note:
+        payload["note"] = note
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if status == 200 else 1
 
 
 def cmd_probe() -> int:
     url = _mcp_url()
     status, body = _request(url, _headers(include_sse=True))
-    print(json.dumps({"url": url, "status_code": status, "body": body}, ensure_ascii=False, indent=2))
+    payload = {
+        "url": url,
+        "status_code": status,
+        "body": body,
+        "user_agent": _headers(include_sse=True).get("User-Agent", ""),
+    }
+    note = _waf_note(status, body)
+    if note:
+        payload["note"] = note
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if status in {200, 400, 401, 406} else 1
 
 

@@ -187,25 +187,27 @@ docker compose up -d --build
 http://<your-host>:8000/mcp
 ```
 
-普通 HTTP 活性检查可用：
-
-```text
-http://<your-host>:8000/health
-```
-
 如果启用了 `MCP_BEARER_TOKEN`，客户端需要带：
 
 ```text
 Authorization: Bearer <your-token>
 ```
 
-验证时建议先看健康检查：
+如果你愿意额外开放普通健康检查接口，可用：
 
 ```bash
 curl http://127.0.0.1:8000/health
 ```
 
-不要把裸 `GET /mcp` 当成业务可用性探针；`/mcp` 是 MCP 协议入口，不是普通 REST API。
+如果你只想把 MCP 1.0 入口暴露到公网，那就只开放 `/mcp` 即可，不需要公开 `/health`。
+
+面向公网的最小验证建议是直接测 `/mcp`：
+
+```bash
+curl -i -H 'Accept: text/event-stream' http://127.0.0.1:8000/mcp
+```
+
+对 `streamable-http` 来说，`400` / `401` / `406` 都可能是“入口可达但请求还不是完整 MCP 会话”的正常表现。
 
 ### 日志与排错
 
@@ -292,7 +294,6 @@ bash openclaw/scripts/install_openclaw_skill.sh \
 验收：
 
 ```bash
-python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py health
 python3 ~/.openclaw/skills/grok-search/scripts/groksearch_openclaw.py probe
 ```
 
