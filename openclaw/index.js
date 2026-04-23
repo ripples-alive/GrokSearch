@@ -100,8 +100,6 @@ const ResearchToolSchema = Type.Object(
   { additionalProperties: false }
 );
 
-const EmptyToolSchema = Type.Object({}, { additionalProperties: false });
-
 function toolErrorResult(message, details = {}) {
   return {
     content: [{ type: "text", text: message }],
@@ -456,36 +454,6 @@ export default definePluginEntry({
             bearerToken: runtime.bearerToken,
           });
         }
-      )
-    );
-
-    api.registerTool(
-      createJsonTool(
-        "groksearch_config",
-        "GrokSearch Config",
-        "Inspect remote GrokSearch MCP configuration as seen by the wrapper runtime.",
-        EmptyToolSchema,
-        async () => await runCommand(api.config, "config", {})
-      )
-    );
-
-    api.registerTool(
-      createJsonTool(
-        "groksearch_health",
-        "GrokSearch Health",
-        "Run GrokSearch probe plus MCP tool/config checks.",
-        EmptyToolSchema,
-        async () => await runCommand(api.config, "health", {})
-      )
-    );
-
-    api.registerTool(
-      createJsonTool(
-        "groksearch_probe",
-        "GrokSearch Probe",
-        "Probe the remote GrokSearch MCP endpoint without running a search.",
-        EmptyToolSchema,
-        async () => await runCommand(api.config, "probe", {})
       )
     );
   },

@@ -32,9 +32,6 @@ After installation, OpenClaw can use GrokSearch in two ways:
    - `groksearch_extract`
    - `groksearch_map`
    - `groksearch_research`
-   - `groksearch_config`
-   - `groksearch_health`
-   - `groksearch_probe`
 2. As generic OpenClaw providers:
    - `web_search` provider id: `groksearch`
    - `web_fetch` provider id: `groksearch`
@@ -105,6 +102,8 @@ If you want to bypass the JS plugin layer and test the wrapper directly:
 ```bash
 python3 {baseDir}/scripts/groksearch_openclaw.py health
 ```
+
+These diagnostics stay at the script layer and are intentionally not registered as public agent tools.
 
 ## Runtime Policy
 

@@ -84,10 +84,7 @@
       "groksearch_sources",
       "groksearch_extract",
       "groksearch_map",
-      "groksearch_research",
-      "groksearch_config",
-      "groksearch_health",
-      "groksearch_probe"
+      "groksearch_research"
     ]
   },
   "configSchema": {

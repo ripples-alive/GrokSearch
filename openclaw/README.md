@@ -32,9 +32,6 @@
 - `groksearch_extract`
 - `groksearch_map`
 - `groksearch_research`
-- `groksearch_config`
-- `groksearch_health`
-- `groksearch_probe`
 
 同时也注册：
 
@@ -133,7 +130,7 @@ OpenClaw 会读取：
 
 - `web_search` 会走 GrokSearch provider
 - `web_fetch` 会走 GrokSearch provider
-- 额外的显式工具仍然保留，可用于 `sources`、`map`、`health`、`config`
+- 额外的显式工具仍然保留，可用于 `sources`、`map`、`research`
 
 ## 验收
 
@@ -170,6 +167,8 @@ node openclaw/scripts/test_plugin_tool.mjs map \
 python3 openclaw/scripts/groksearch_openclaw.py health
 ```
 
+这些 `probe` / `health` / `config` 能力保留在本地运维脚本层，用于安装验证和排障，不会注册成公开的 Agent tool。
+
 ## 关于 `probe`
 
 - `probe` 只检查 `/mcp` 连通性
@@ -201,7 +200,11 @@ OpenClaw 拿到这份 plugin 后，推荐的调用层级是：
   - 用 `groksearch_sources`
 - 需要站点结构：
   - 用 `groksearch_map`
-- 需要排查配置或连通性：
-  - 用 `groksearch_config`
-  - 用 `groksearch_health`
-  - 必要时用 `groksearch_probe`
+- 需要一站式搜索加抓取：
+  - 用 `groksearch_research`
+
+如果是安装排障或公网 MCP 可达性验证，交给运维脚本：
+
+- `node openclaw/scripts/test_plugin_tool.mjs probe`
+- `node openclaw/scripts/test_plugin_tool.mjs health`
+- `python3 openclaw/scripts/groksearch_openclaw.py config`

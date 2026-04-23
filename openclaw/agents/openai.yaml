@@ -1,7 +1,7 @@
 interface:
   display_name: "GrokSearch"
   short_description: "OpenClaw GrokSearch plugin for MCP-backed web_search, web_fetch, source lookup, extract, and map"
-  default_prompt: "Use the installed GrokSearch OpenClaw plugin as the default external search stack when it is configured and healthy. Prefer generic web_search and web_fetch when provider selection points to groksearch, and use explicit groksearch_search, groksearch_sources, groksearch_extract, groksearch_map, groksearch_research, groksearch_health, and groksearch_config when you need GrokSearch-specific control or diagnostics."
+  default_prompt: "Use the installed GrokSearch OpenClaw plugin as the default external search stack when it is configured. Prefer generic web_search and web_fetch when provider selection points to groksearch, and use explicit groksearch_search, groksearch_sources, groksearch_extract, groksearch_map, and groksearch_research when you need GrokSearch-specific control."
 
 policy:
   allow_implicit_invocation: true

@@ -1,6 +1,6 @@
 ---
 name: grok-search
-description: OpenClaw-native GrokSearch plugin skill. Prefer generic web_search and web_fetch when GrokSearch is selected as the provider, and use explicit groksearch_* tools for source sessions, site mapping, health checks, and config inspection.
+description: OpenClaw-native GrokSearch plugin skill. Prefer generic web_search and web_fetch when GrokSearch is selected as the provider, and use explicit groksearch_* tools for source sessions, extraction, site mapping, and research flows.
 metadata:
   { "openclaw": { "emoji": "🔎", "requires": { "config": ["plugins.entries.grok-search.enabled"] } } }
 ---
@@ -25,12 +25,6 @@ Use GrokSearch as the default external search stack in OpenClaw when the `grok-s
   - Map a site or section through the remote MCP
 - `groksearch_research`
   - Search plus follow-up extraction and optional mapping
-- `groksearch_config`
-  - Inspect remote config info
-- `groksearch_health`
-  - Run probe plus MCP tool/config checks
-- `groksearch_probe`
-  - Only test MCP reachability
 
 ## Preferred Routing
 
@@ -46,15 +40,11 @@ Use GrokSearch as the default external search stack in OpenClaw when the `grok-s
   - Use `groksearch_search`, then `groksearch_sources`
 - Need site structure instead of page text:
   - Use `groksearch_map`
-- Need to debug why GrokSearch is not being chosen:
-  - Use `groksearch_health` first
-  - Use `groksearch_probe` only for endpoint reachability checks
-- Need to confirm remote MCP settings:
-  - Use `groksearch_config`
+- Need one-call research with search, follow-up fetches, and optional site mapping:
+  - Use `groksearch_research`
 
 ## Usage Notes
 
 - `web_search` and `web_fetch` are the right default choices once `tools.web.search.provider` or `tools.web.fetch.provider` is set to `groksearch`.
-- `groksearch_probe` is not a search tool. It is only for diagnosing whether the remote `/mcp` endpoint is reachable.
-- A `400`, `401`, or `406` from `/mcp` can still mean the MCP endpoint is reachable. Reachability and a valid MCP session are different checks.
-- If the remote edge blocks the current IP or User-Agent, use `groksearch_probe` or `groksearch_health` to confirm that failure mode before falling back to another search provider.
+- Operator diagnostics stay in the local wrapper scripts, not in the public agent tool surface.
+- For install verification or remote MCP troubleshooting, use `node openclaw/scripts/test_plugin_tool.mjs probe|health` or `python3 openclaw/scripts/groksearch_openclaw.py config`.
