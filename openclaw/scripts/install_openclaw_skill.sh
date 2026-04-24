@@ -3,7 +3,6 @@ set -euo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_DIR="$SOURCE_DIR"
-COPY_ENV=""
 
 usage() {
   cat <<'EOF'
@@ -15,7 +14,6 @@ Preferred installation path: `openclaw plugins install /path/to/GrokSearch/openc
 
 Options:
   --install-to DIR   Copy the plugin bundle into DIR
-  --copy-env FILE    Copy FILE to target .env with 0600 permissions
   -h, --help         Show this help
 EOF
 }
@@ -24,10 +22,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-to)
       TARGET_DIR="${2:?missing dir}"
-      shift 2
-      ;;
-    --copy-env)
-      COPY_ENV="${2:?missing env path}"
       shift 2
       ;;
     -h|--help)
@@ -49,23 +43,11 @@ copy_skill_bundle() {
 
   mkdir -p "$TARGET_DIR"
   tar -C "$SOURCE_DIR" \
-    --exclude='.env' \
     --exclude='__pycache__' \
     -cf - . | tar -C "$TARGET_DIR" -xf -
 }
 
-prepare_env_file() {
-  if [[ "$SOURCE_DIR/.env.example" != "$TARGET_DIR/.env.example" ]]; then
-    install -m 0644 "$SOURCE_DIR/.env.example" "$TARGET_DIR/.env.example"
-  fi
-
-  if [[ -n "$COPY_ENV" ]]; then
-    install -m 0600 "$COPY_ENV" "$TARGET_DIR/.env"
-  fi
-}
-
 copy_skill_bundle
-prepare_env_file
 
 cat <<EOF
 GrokSearch OpenClaw plugin bundle is ready at: $TARGET_DIR
@@ -82,5 +64,4 @@ Next steps:
 4. Optional: set mcp.healthUrl if health is not served next to /mcp
 5. Run a plugin-backed probe from OpenClaw after config is loaded
 6. Run a plugin-backed search from OpenClaw after config is loaded
-7. Optional legacy diagnostic fallback: python3 $TARGET_DIR/scripts/groksearch_openclaw.py health
 EOF

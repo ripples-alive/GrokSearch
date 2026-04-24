@@ -18,7 +18,7 @@
     "disclosures": [
       "This skill sends queries and the configured bearer token to the configured remote GrokSearch MCP endpoint.",
       "This bundle includes a native OpenClaw plugin entry with a pure-JS MCP runtime for OpenClaw provider and tool registration.",
-      "An optional bundled Python diagnostic script is included for local troubleshooting, but the plugin runtime does not execute local child processes.",
+      "A local JS helper is included for manual MCP troubleshooting, but the plugin runtime does not execute local child processes.",
       "Configure remote MCP settings through plugins.entries.grok-search.config and SecretRef-backed values instead of plugin-side environment-variable fallback.",
       "The bundled installer copies local runtime files from this bundle and does not download remote code or modify other installed skills.",
       "If you point the configured MCP URL or baseUrl at an untrusted host, that host can see your queries and token."

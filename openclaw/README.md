@@ -13,9 +13,8 @@
   - `plugin-runtime.js`
 - Agent 使用策略
   - `skills/grok-search/SKILL.md`
-- 可选运维脚本
-  - `scripts/groksearch_openclaw.py`
-  - `runtime/groksearch/*`
+- 本地测试辅助
+  - `scripts/test_plugin_tool.mjs`
 
 核心设计是：
 
@@ -147,13 +146,7 @@ node openclaw/scripts/test_plugin_tool.mjs map \
   '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'
 ```
 
-如果你还想用附带的 Python 脚本单独验证远端 MCP，也可以：
-
-```bash
-python3 openclaw/scripts/groksearch_openclaw.py health
-```
-
-这些 `probe` / `health` / `config` 能力保留在本地运维脚本层，用于安装验证和排障，不会注册成公开的 Agent tool。
+这些 `probe` / `health` 能力只保留在本地测试辅助层，用于安装验证和排障，不会注册成公开的 Agent tool。
 
 ## 关于 `probe`
 
@@ -168,11 +161,7 @@ python3 openclaw/scripts/groksearch_openclaw.py health
 
 - `plugins.entries.grok-search.config`
 
-同时，附带的 Python 诊断脚本仍兼容读取旧的：
-
-- `skills.entries.grok-search.env`
-
-所以已有老配置不一定需要立刻迁移，但新部署建议统一走 plugin config。
+旧的 env 兼容路径已经移除，新部署统一走 plugin config。
 
 ## 插件暴露的能力
 
@@ -190,4 +179,3 @@ python3 openclaw/scripts/groksearch_openclaw.py health
 
 - `node openclaw/scripts/test_plugin_tool.mjs probe '{}' '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'`
 - `node openclaw/scripts/test_plugin_tool.mjs health '{}' '{"mcp":{"baseUrl":"https://search.example.com","bearerToken":"your-token"}}'`
-- `python3 openclaw/scripts/groksearch_openclaw.py config`
