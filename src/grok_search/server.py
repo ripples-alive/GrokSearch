@@ -280,12 +280,20 @@ async def get_sources(
     return {"session_id": session_id, "sources": sources, "sources_count": len(sources)}
 
 
-async def _call_tavily_extract(url: str) -> str | None:
+def _fetch_result(status: str, *, content: str = "", reason: str = "") -> dict[str, str]:
+    return {
+        "status": status,
+        "content": content,
+        "reason": reason,
+    }
+
+
+async def _call_tavily_extract(url: str) -> dict[str, str]:
     import httpx
     api_url = config.tavily_api_url
     api_key = config.tavily_api_key
     if not api_key:
-        return None
+        return _fetch_result("unavailable", reason="TAVILY_API_KEY 未配置")
     endpoint = f"{api_url.rstrip('/')}/extract"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     body = {"urls": [url], "format": "markdown"}
@@ -296,12 +304,14 @@ async def _call_tavily_extract(url: str) -> str | None:
             data = response.json()
             if data.get("results") and len(data["results"]) > 0:
                 content = data["results"][0].get("raw_content", "")
-                return content if content and content.strip() else None
-            return None
+                if content and content.strip():
+                    return _fetch_result("success", content=content)
+                return _fetch_result("empty", reason="Tavily 返回空内容")
+            return _fetch_result("empty", reason="Tavily 未返回 results")
     except Exception as e:
         if config.debug_enabled:
             await log_exception(None, f"Tavily extract failed for {url}", e, True)
-        return None
+        return _fetch_result("failed", reason=str(e))
 
 
 async def _call_tavily_search(query: str, max_results: int = 6) -> list[dict] | None:
@@ -358,12 +368,12 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
         return None
 
 
-async def _call_firecrawl_scrape(url: str, ctx=None) -> str | None:
+async def _call_firecrawl_scrape(url: str, ctx=None) -> dict[str, str]:
     import httpx
     api_url = config.firecrawl_api_url
     api_key = config.firecrawl_api_key
     if not api_key:
-        return None
+        return _fetch_result("unavailable", reason="FIRECRAWL_API_KEY 未配置")
     endpoint = f"{api_url.rstrip('/')}/scrape"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     max_retries = config.retry_max_attempts
@@ -381,12 +391,12 @@ async def _call_firecrawl_scrape(url: str, ctx=None) -> str | None:
                 data = response.json()
                 markdown = data.get("data", {}).get("markdown", "")
                 if markdown and markdown.strip():
-                    return markdown
+                    return _fetch_result("success", content=markdown)
                 await log_info(ctx, f"Firecrawl: markdown为空, 重试 {attempt + 1}/{max_retries}", config.debug_enabled)
         except Exception as e:
             await log_info(ctx, f"Firecrawl error: {e}", config.debug_enabled)
-            return None
-    return None
+            return _fetch_result("failed", reason=str(e))
+    return _fetch_result("empty", reason="Firecrawl 返回空内容")
 
 
 @mcp.tool(
@@ -413,18 +423,30 @@ async def web_fetch(
 ) -> str:
     await log_info(ctx, f"Begin Fetch: {url}", config.debug_enabled)
 
-    result = await _call_tavily_extract(url)
-    if result:
+    tavily_result = await _call_tavily_extract(url)
+    if tavily_result["status"] == "success":
         await log_info(ctx, "Fetch Finished (Tavily)!", config.debug_enabled)
-        return result
+        return tavily_result["content"]
 
-    await log_info(ctx, "Tavily unavailable or failed, trying Firecrawl...", config.debug_enabled)
-    result = await _call_firecrawl_scrape(url, ctx)
-    if result:
+    if tavily_result["status"] == "unavailable":
+        await log_info(ctx, f"Tavily unavailable, trying Firecrawl... ({tavily_result['reason']})", config.debug_enabled)
+    elif tavily_result["status"] == "failed":
+        await log_info(ctx, f"Tavily failed, trying Firecrawl... ({tavily_result['reason']})", config.debug_enabled)
+    else:
+        await log_info(ctx, f"Tavily returned no usable content, trying Firecrawl... ({tavily_result['reason']})", config.debug_enabled)
+
+    firecrawl_result = await _call_firecrawl_scrape(url, ctx)
+    if firecrawl_result["status"] == "success":
         await log_info(ctx, "Fetch Finished (Firecrawl)!", config.debug_enabled)
-        return result
+        return firecrawl_result["content"]
 
-    await log_info(ctx, "Fetch Failed!", config.debug_enabled)
+    if firecrawl_result["status"] == "unavailable":
+        await log_info(ctx, f"Fetch Failed: Firecrawl unavailable ({firecrawl_result['reason']})", config.debug_enabled)
+    elif firecrawl_result["status"] == "failed":
+        await log_info(ctx, f"Fetch Failed: Firecrawl failed ({firecrawl_result['reason']})", config.debug_enabled)
+    else:
+        await log_info(ctx, f"Fetch Failed: Firecrawl returned no usable content ({firecrawl_result['reason']})", config.debug_enabled)
+
     if not config.tavily_api_key and not config.firecrawl_api_key:
         return "配置错误: TAVILY_API_KEY 和 FIRECRAWL_API_KEY 均未配置"
     return "提取失败: 所有提取服务均未能获取内容"
