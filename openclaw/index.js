@@ -8,7 +8,6 @@ import {
 import { wrapExternalContent } from "openclaw/plugin-sdk/provider-web-fetch";
 import {
   resolveConfiguredSecretInputString,
-  resolvePluginConfigObject,
 } from "openclaw/plugin-sdk/config-runtime";
 import { Type } from "typebox";
 import {
@@ -109,7 +108,7 @@ function toolErrorResult(message, details = {}) {
 
 async function resolvePluginRuntimeConfig(config) {
   const safeConfig = config ?? {};
-  const pluginConfig = resolvePluginConfigObject(safeConfig, PLUGIN_ID) ?? resolvePluginConfig(safeConfig);
+  const pluginConfig = resolvePluginConfig(safeConfig);
   const bearer = await resolveConfiguredSecretInputString({
     config: safeConfig,
     env: process.env,
