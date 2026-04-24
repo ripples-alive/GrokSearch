@@ -88,7 +88,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/GuDaStudio/GrokSearch@grok-with-tavily",
+    "git+https://github.com/ripples-alive/GrokSearch",
     "grok-search"
   ],
   "env": {
@@ -115,7 +115,7 @@ claude mcp add-json grok-search --scope user '{
   "args": [
     "--native-tls",
     "--from",
-    "git+https://github.com/GuDaStudio/GrokSearch@grok-with-tavily",
+    "git+https://github.com/ripples-alive/GrokSearch",
     "grok-search"
   ],
   "env": {
@@ -466,5 +466,5 @@ A: 在 Claude 对话中说"显示 grok-search 配置信息"，将自动测试 AP
 
 **如果这个项目对您有帮助，请给个 Star！**
 
-[![Star History Chart](https://api.star-history.com/svg?repos=GuDaStudio/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#GuDaStudio/GrokSearch&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=ripples-alive/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#ripples-alive/GrokSearch&type=date&legend=top-left)
 </div>

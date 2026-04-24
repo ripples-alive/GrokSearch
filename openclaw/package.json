@@ -1,5 +1,5 @@
 {
-  "name": "@gudastudio/openclaw-grok-search",
+  "name": "@ripples/openclaw-grok-search",
   "version": "0.1.0",
   "private": true,
   "description": "OpenClaw plugin for GrokSearch MCP-backed web search and extraction",

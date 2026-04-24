@@ -95,7 +95,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/GuDaStudio/GrokSearch@grok-with-tavily",
+    "git+https://github.com/ripples-alive/GrokSearch",
     "grok-search"
   ],
   "env": {
@@ -114,7 +114,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/GuDaStudio/GrokSearch@grok-with-tavily",
+    "git+https://github.com/ripples-alive/GrokSearch",
     "grok-search"
   ],
   "env": {
@@ -422,5 +422,5 @@ A: Say "Show grok-search configuration info" in a Claude conversation to automat
 
 **If this project helps you, please give it a Star!**
 
-[![Star History Chart](https://api.star-history.com/svg?repos=GuDaStudio/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#GuDaStudio/GrokSearch&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=ripples-alive/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#ripples-alive/GrokSearch&type=date&legend=top-left)
 </div>

@@ -80,7 +80,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/GuDaStudio/GrokSearch@grok-with-tavily",
+    "git+https://github.com/ripples-alive/GrokSearch",
     "grok-search"
   ],
   "env": {

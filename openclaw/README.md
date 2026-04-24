@@ -34,12 +34,19 @@
 - `groksearch_map`
 - `groksearch_research`
 
-同时也注册：
+同时注册并已验证可用：
 
 - `web_search` provider: `groksearch`
+
+另外，plugin manifest 里也声明了：
+
 - `web_fetch` provider: `groksearch`
 
-这意味着它不再只是“能探活的 skill”，而是已经能作为 OpenClaw 的原生搜索/抓取入口被调用。
+但在当前验证环境（OpenClaw `2026.4.15`）里，运行态最终只识别到了 `web-search: groksearch`，**没有把它纳入有效的 `web-fetch` provider 列表**。因此当前版本下建议：
+
+- 把 GrokSearch 当作 `web_search` provider 使用
+- `groksearch_extract` 继续作为正文抓取/提取的显式工具使用
+- 不要在 `tools.web.fetch.provider` 里强绑 `groksearch`，否则会触发 `WEB_FETCH_PROVIDER_INVALID_AUTODETECT` 并回退到自动检测
 
 ## 推荐最小配置
 
@@ -110,16 +117,13 @@ OpenClaw 会读取：
 
 如果你要让 OpenClaw 真正把 GrokSearch 当成默认搜索台位，需要让 provider 选择也指向它。
 
-推荐：
+推荐（当前 OpenClaw `2026.4.15` 验证口径）：
 
 ```json
 {
   "tools": {
     "web": {
       "search": {
-        "provider": "groksearch"
-      },
-      "fetch": {
         "provider": "groksearch"
       }
     }
@@ -130,7 +134,8 @@ OpenClaw 会读取：
 也就是说：
 
 - `web_search` 会走 GrokSearch provider
-- `web_fetch` 会走 GrokSearch provider
+- `web_fetch` 暂时不要强绑 `groksearch`
+- 正文抓取/提取优先直接使用 `groksearch_extract`
 - 额外的显式工具仍然保留，可用于 `sources`、`map`、`research`
 
 ## 验收
@@ -202,7 +207,7 @@ OpenClaw 拿到这份 plugin 后，推荐的调用层级是：
 - 普通网页搜索：
   - 直接用 `web_search`
 - 普通单页提取：
-  - 直接用 `web_fetch`
+  - 当前版本优先直接用 `groksearch_extract`
 - 需要看 `session_id` 对应的完整信源：
   - 用 `groksearch_sources`
 - 需要站点结构：
