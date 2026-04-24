@@ -112,33 +112,6 @@ OpenClaw 会读取：
 
 并按 plugin 方式加载，而不是只把它当成普通 skill 文本。
 
-## 如何让它接管搜索位
-
-如果你要让 OpenClaw 真正把 GrokSearch 当成默认搜索台位，需要让 provider 选择也指向它。
-
-推荐：
-
-```json
-{
-  "tools": {
-    "web": {
-      "search": {
-        "provider": "groksearch"
-      },
-      "fetch": {
-        "provider": "groksearch"
-      }
-    }
-  }
-}
-```
-
-也就是说：
-
-- `web_search` 会走 GrokSearch provider
-- `web_fetch` 会走 GrokSearch provider
-- 额外的显式工具仍然保留，可用于 `sources`、`map`、`research`
-
 ## 验收
 
 先测最小连通性：
@@ -201,20 +174,17 @@ python3 openclaw/scripts/groksearch_openclaw.py health
 
 所以已有老配置不一定需要立刻迁移，但新部署建议统一走 plugin config。
 
-## OpenClaw 应该怎么用它
+## 插件暴露的能力
 
-OpenClaw 拿到这份 plugin 后，推荐的调用层级是：
+安装后，插件会暴露以下显式工具：
 
-- 普通网页搜索：
-  - 直接用 `web_search`
-- 普通单页提取：
-  - 直接用 `web_fetch` 或 `groksearch_extract`
-- 需要看 `session_id` 对应的完整信源：
-  - 用 `groksearch_sources`
-- 需要站点结构：
-  - 用 `groksearch_map`
-- 需要一站式搜索加抓取：
-  - 用 `groksearch_research`
+- `groksearch_search`
+- `groksearch_extract`
+- `groksearch_map`
+- `groksearch_research`
+- `groksearch_sources`
+
+如果宿主启用了对应的 provider 路由能力，也可以把它接到宿主的 `web_search` / `web_fetch` 入口；这部分是否启用、如何路由，属于宿主侧配置，不在本插件文档中做强约束。
 
 如果是安装排障或公网 MCP 可达性验证，交给运维脚本：
 
