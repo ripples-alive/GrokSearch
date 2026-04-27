@@ -446,6 +446,19 @@ def _parse_map_urls(payload: str, seed_url: str, limit: int) -> tuple[str, list[
     return base_url, urls[:limit]
 
 
+def _tavily_map_payload_error(payload: str) -> str:
+    stripped = _as_str(payload).strip()
+    if not stripped:
+        return "Tavily map returned empty response"
+    if stripped.startswith(("配置错误:", "映射超时:", "HTTP错误:", "映射错误:")):
+        return stripped
+    try:
+        json.loads(stripped)
+    except json.JSONDecodeError:
+        return "Tavily map returned non-JSON response"
+    return ""
+
+
 def _title_from_markdown(content: str, fallback: str) -> str:
     for line in (content or "").splitlines():
         stripped = line.strip()
@@ -829,6 +842,136 @@ def _search_branch_meta(provider: str, status: str, *, count: int = 0, reason: s
     return meta
 
 
+def _elapsed_ms(started_at: float) -> int:
+    return round((time.perf_counter() - started_at) * 1000)
+
+
+def _compat_channel_meta(
+    provider: str,
+    status: str,
+    *,
+    operation: str = "",
+    count: int = 0,
+    elapsed_ms: int = 0,
+    reason: str = "",
+) -> dict:
+    meta = {
+        "provider": provider,
+        "status": status,
+        "count": count,
+        "elapsed_ms": elapsed_ms,
+    }
+    if operation:
+        meta["operation"] = operation
+    clean_reason = _clean_proxy_text(reason, collapse_whitespace=True)
+    if clean_reason:
+        meta["reason"] = clean_reason[:500]
+    return meta
+
+
+def _compat_provider_summary(item: dict) -> str:
+    label = _as_str(item.get("provider")).strip()
+    operation = _as_str(item.get("operation")).strip()
+    if operation:
+        label = f"{label}.{operation}" if label else operation
+
+    parts = [
+        f"{label}={item.get('status', 'unknown')}",
+        f"count={item.get('count', 0)}",
+        f"elapsed_ms={item.get('elapsed_ms', 0)}",
+    ]
+    for key in ("attempts", "success", "failed", "empty", "unavailable", "selected"):
+        if key in item:
+            parts.append(f"{key}={item.get(key, 0)}")
+    if item.get("reason"):
+        parts.append(f"reason={item['reason']}")
+    return " ".join(parts)
+
+
+def _format_compat_sources_summary(items: list[dict]) -> str:
+    return ", ".join(_compat_provider_summary(item) for item in items) or "no channel stats"
+
+
+def _fetch_overall_status(channel_statuses: list[str]) -> str:
+    if not channel_statuses:
+        return "skipped"
+    if all(status == "unavailable" for status in channel_statuses):
+        return "unavailable"
+    if any(status == "failed" for status in channel_statuses):
+        return "failed"
+    if any(status == "empty" for status in channel_statuses):
+        return "empty"
+    return channel_statuses[-1]
+
+
+def _aggregate_fetch_channel_stats(fetch_metas: list[dict]) -> list[dict]:
+    provider_order = {"tavily": 0, "firecrawl": 1}
+    operation_order = {"extract": 0, "scrape": 1}
+    stats: dict[tuple[str, str], dict] = {}
+
+    for fetch_meta in fetch_metas:
+        for channel in fetch_meta.get("channels") or []:
+            provider = _as_str(channel.get("provider")).strip()
+            operation = _as_str(channel.get("operation")).strip()
+            if not provider:
+                continue
+            key = (provider, operation)
+            item = stats.setdefault(
+                key,
+                {
+                    "provider": provider,
+                    "operation": operation,
+                    "status": "skipped",
+                    "count": 0,
+                    "attempts": 0,
+                    "elapsed_ms": 0,
+                    "success": 0,
+                    "failed": 0,
+                    "empty": 0,
+                    "unavailable": 0,
+                },
+            )
+            status = _as_str(channel.get("status") or "unknown").strip()
+            item["attempts"] += 1
+            item["elapsed_ms"] += _as_int(channel.get("elapsed_ms"), default=0, minimum=0, maximum=10_000_000)
+            item["count"] += _as_int(channel.get("count"), default=0, minimum=0, maximum=10_000_000)
+            if status in ("success", "failed", "empty", "unavailable"):
+                item[status] += 1
+            if channel.get("reason") and not item.get("reason"):
+                item["reason"] = channel["reason"]
+
+    aggregated = list(stats.values())
+    for item in aggregated:
+        if item["success"]:
+            item["status"] = "success"
+        elif item["failed"]:
+            item["status"] = "failed"
+        elif item["empty"]:
+            item["status"] = "empty"
+        elif item["unavailable"]:
+            item["status"] = "unavailable"
+
+    aggregated.sort(
+        key=lambda item: (
+            provider_order.get(item["provider"], 99),
+            operation_order.get(item.get("operation", ""), 99),
+        )
+    )
+    return aggregated
+
+
+def _format_fetch_route_summary(fetch_metas: list[dict], *, limit: int = 8) -> str:
+    routes: list[str] = []
+    for meta in fetch_metas[:limit]:
+        url = _clean_proxy_url(meta.get("url")) or _as_str(meta.get("url")).strip()
+        provider = _as_str(meta.get("provider")).strip() or "none"
+        status = _as_str(meta.get("status") or "unknown").strip()
+        routes.append(f"{url}=>{provider}:{status} elapsed_ms={meta.get('elapsed_ms', 0)}")
+    if len(fetch_metas) > limit:
+        routes.append(f"...+{len(fetch_metas) - limit} more")
+    return "; ".join(routes)
+
+
 _SEARCH_PROVIDER_WEIGHTS = {"grok": 1.08, "tavily": 1.0, "firecrawl": 0.92}
 _SEARCH_PROVIDER_PRIORITY = {"grok": 0, "tavily": 1, "firecrawl": 2}
 _SEARCH_CONFIRMATION_WEIGHTS = {1: 1.0, 2: 1.25, 3: 1.45}
@@ -930,6 +1073,30 @@ async def _compat_fetch_url(
     format_mode: str = "markdown",
     timeout: float | None = None,
 ) -> tuple[str, str, str]:
+    content, provider, reason, _ = await _compat_fetch_url_with_meta(
+        url,
+        query=query,
+        chunks_per_source=chunks_per_source,
+        extract_depth=extract_depth,
+        format_mode=format_mode,
+        timeout=timeout,
+    )
+    return content, provider, reason
+
+
+async def _compat_fetch_url_with_meta(
+    url: str,
+    *,
+    query: str = "",
+    chunks_per_source: int = 3,
+    extract_depth: str = "basic",
+    format_mode: str = "markdown",
+    timeout: float | None = None,
+) -> tuple[str, str, str, dict]:
+    started = time.perf_counter()
+    channels: list[dict] = []
+
+    tavily_started = time.perf_counter()
     tavily_result = await _call_tavily_extract(
         url,
         query=query,
@@ -938,19 +1105,61 @@ async def _compat_fetch_url(
         format_mode=format_mode,
         timeout=timeout,
     )
+    tavily_status = _as_str(tavily_result.get("status") or "unknown").strip()
+    channels.append(
+        _compat_channel_meta(
+            "tavily",
+            tavily_status,
+            operation="extract",
+            count=1 if tavily_status == "success" else 0,
+            elapsed_ms=_elapsed_ms(tavily_started),
+            reason=_as_str(tavily_result.get("reason")),
+        )
+    )
     if tavily_result["status"] == "success":
-        return tavily_result["content"], "tavily", ""
+        return tavily_result["content"], "tavily", "", {
+            "url": url,
+            "provider": "tavily",
+            "status": "success",
+            "elapsed_ms": _elapsed_ms(started),
+            "channels": channels,
+        }
 
+    firecrawl_started = time.perf_counter()
     firecrawl_result = await _call_firecrawl_scrape(url)
+    firecrawl_status = _as_str(firecrawl_result.get("status") or "unknown").strip()
+    channels.append(
+        _compat_channel_meta(
+            "firecrawl",
+            firecrawl_status,
+            operation="scrape",
+            count=1 if firecrawl_status == "success" else 0,
+            elapsed_ms=_elapsed_ms(firecrawl_started),
+            reason=_as_str(firecrawl_result.get("reason")),
+        )
+    )
     if firecrawl_result["status"] == "success":
-        return firecrawl_result["content"], "firecrawl", ""
+        return firecrawl_result["content"], "firecrawl", "", {
+            "url": url,
+            "provider": "firecrawl",
+            "status": "success",
+            "elapsed_ms": _elapsed_ms(started),
+            "channels": channels,
+        }
 
     reasons = [
         _as_str(tavily_result.get("reason")).strip(),
         _as_str(firecrawl_result.get("reason")).strip(),
     ]
     reason = " | ".join([item for item in reasons if item]) or "No content returned"
-    return "", "", reason
+    return "", "", reason, {
+        "url": url,
+        "provider": "",
+        "status": _fetch_overall_status([tavily_status, firecrawl_status]),
+        "elapsed_ms": _elapsed_ms(started),
+        "reason": _clean_proxy_text(reason, collapse_whitespace=True),
+        "channels": channels,
+    }
 
 
 async def _compat_search_payload(body: dict) -> dict:
@@ -1396,9 +1605,10 @@ async def _compat_extract_payload(body: dict) -> dict:
     request_id = _new_request_id()
     results: list[dict] = []
     failed_results: list[dict] = []
+    fetch_metas: list[dict] = []
 
     for url in urls:
-        content, _, reason = await _compat_fetch_url(
+        content, provider, reason, fetch_meta = await _compat_fetch_url_with_meta(
             url,
             query=query,
             chunks_per_source=chunks_per_source,
@@ -1406,8 +1616,11 @@ async def _compat_extract_payload(body: dict) -> dict:
             format_mode=format_mode,
             timeout=timeout,
         )
+        fetch_metas.append(fetch_meta)
         if content.strip():
             item = {"url": url, "raw_content": content}
+            if provider:
+                item["source"] = provider
             if include_images:
                 item["images"] = []
             if include_favicon:
@@ -1418,11 +1631,24 @@ async def _compat_extract_payload(body: dict) -> dict:
         else:
             failed_results.append({"url": url, "error": reason or "No content returned"})
 
+    extract_sources = _aggregate_fetch_channel_stats(fetch_metas)
+    elapsed = time.perf_counter() - started
+    await log_info(
+        None,
+        (
+            f"Compatible extract: urls={len(urls)} success={len(results)} failed={len(failed_results)} "
+            f"elapsed_ms={round(elapsed * 1000)}; channels={_format_compat_sources_summary(extract_sources)}; "
+            f"routes={_format_fetch_route_summary(fetch_metas)}"
+        ),
+        True,
+    )
+
     payload = {
         "results": results,
         "failed_results": failed_results,
-        "response_time": round(time.perf_counter() - started, 3),
+        "response_time": round(elapsed, 3),
         "request_id": request_id,
+        "extract_sources": extract_sources,
     }
     if include_usage:
         payload["usage"] = {"credits": 0}
@@ -1432,17 +1658,83 @@ async def _compat_extract_payload(body: dict) -> dict:
 async def _compat_crawl_payload(body: dict) -> dict:
     timeout = _as_float(body.get("timeout"), default=150.0, minimum=10.0, maximum=150.0)
     fallback_reason = ""
+    started = time.perf_counter()
+    request_id = _new_request_id()
+    crawl_attempt_meta = None
     if config.tavily_api_key:
+        tavily_crawl_started = time.perf_counter()
         try:
-            return await _proxy_tavily_post("/crawl", body, timeout=timeout + 10.0)
+            payload = await _proxy_tavily_post("/crawl", body, timeout=timeout + 10.0)
+            elapsed = time.perf_counter() - started
+            crawl_sources = [
+                _compat_channel_meta(
+                    "tavily",
+                    "success",
+                    operation="crawl",
+                    count=len(payload.get("results") or []),
+                    elapsed_ms=_elapsed_ms(tavily_crawl_started),
+                )
+            ]
+            payload["response_time"] = round(elapsed, 3)
+            payload["request_id"] = _as_str(payload.get("request_id")).strip() or request_id
+            payload["crawl_sources"] = crawl_sources
+            await log_info(
+                None,
+                (
+                    f"Compatible crawl: mode=tavily status=success url={_as_str(body.get('url')).strip()!r} "
+                    f"results={len(payload.get('results') or [])} elapsed_ms={round(elapsed * 1000)}; "
+                    f"channels={_format_compat_sources_summary(crawl_sources)}"
+                ),
+                True,
+            )
+            return payload
         except CompatHTTPError as e:
             fallback_reason = str(e)
-            await log_info(None, f"Tavily crawl unavailable, falling back to local crawl: {fallback_reason}", True)
+            crawl_attempt_meta = _compat_channel_meta(
+                "tavily",
+                "failed",
+                operation="crawl",
+                count=0,
+                elapsed_ms=_elapsed_ms(tavily_crawl_started),
+                reason=f"[{e.status_code}] {fallback_reason}",
+            )
+            await log_info(
+                None,
+                (
+                    "Tavily crawl failed, falling back to local crawl: "
+                    f"elapsed_ms={crawl_attempt_meta['elapsed_ms']} status_code={e.status_code} reason={fallback_reason}"
+                ),
+                True,
+            )
         except Exception as e:
             fallback_reason = str(e)
-            await log_info(None, f"Tavily crawl failed, falling back to local crawl: {fallback_reason}", True)
+            crawl_attempt_meta = _compat_channel_meta(
+                "tavily",
+                "failed",
+                operation="crawl",
+                count=0,
+                elapsed_ms=_elapsed_ms(tavily_crawl_started),
+                reason=fallback_reason,
+            )
+            await log_info(
+                None,
+                (
+                    "Tavily crawl failed, falling back to local crawl: "
+                    f"elapsed_ms={crawl_attempt_meta['elapsed_ms']} reason={fallback_reason}"
+                ),
+                True,
+            )
             if config.debug_enabled:
                 await log_exception(None, "Tavily upstream crawl proxy failed, falling back to local compatibility path", e, True)
+    else:
+        crawl_attempt_meta = _compat_channel_meta(
+            "tavily",
+            "unavailable",
+            operation="crawl",
+            count=0,
+            elapsed_ms=0,
+            reason="TAVILY_API_KEY is not configured",
+        )
 
     url = _as_str(body.get("url")).strip()
     if not url:
@@ -1457,11 +1749,18 @@ async def _compat_crawl_payload(body: dict) -> dict:
     format_mode = _as_str(body.get("format") or "markdown").strip().lower() or "markdown"
     include_usage = _as_bool(body.get("include_usage"), default=False)
 
-    started = time.perf_counter()
-    request_id = _new_request_id()
     base_url = url
     urls = [url]
+    map_meta = _compat_channel_meta(
+        "tavily",
+        "skipped",
+        operation="map",
+        count=0,
+        elapsed_ms=0,
+        reason="limit <= 1 or TAVILY_API_KEY is not configured",
+    )
     if config.tavily_api_key and limit > 1:
+        map_started = time.perf_counter()
         try:
             map_payload = await _call_tavily_map(
                 url,
@@ -1471,19 +1770,62 @@ async def _compat_crawl_payload(body: dict) -> dict:
                 limit=limit,
                 timeout=timeout,
             )
-            base_url, urls = _parse_map_urls(map_payload, url, limit)
+            map_elapsed_ms = _elapsed_ms(map_started)
+            map_error = _tavily_map_payload_error(map_payload)
+            if map_error:
+                map_meta = _compat_channel_meta(
+                    "tavily",
+                    "failed",
+                    operation="map",
+                    count=0,
+                    elapsed_ms=map_elapsed_ms,
+                    reason=map_error,
+                )
+                fallback_reason = " | ".join([item for item in (fallback_reason, map_error) if item])
+                await log_info(
+                    None,
+                    f"Tavily map failed during crawl fallback, scraping seed URL only: elapsed_ms={map_elapsed_ms} reason={map_error}",
+                    True,
+                )
+            else:
+                base_url, urls = _parse_map_urls(map_payload, url, limit)
+                map_meta = _compat_channel_meta(
+                    "tavily",
+                    "success" if urls else "empty",
+                    operation="map",
+                    count=len(urls),
+                    elapsed_ms=map_elapsed_ms,
+                    reason="" if urls else "Tavily map returned no URLs",
+                )
+                if not urls:
+                    urls = [url]
         except Exception as e:
             reason = str(e)
             fallback_reason = " | ".join([item for item in (fallback_reason, reason) if item])
-            await log_info(None, f"Tavily map failed during crawl fallback, scraping seed URL only: {reason}", True)
+            map_meta = _compat_channel_meta(
+                "tavily",
+                "failed",
+                operation="map",
+                count=0,
+                elapsed_ms=_elapsed_ms(map_started),
+                reason=reason,
+            )
+            await log_info(
+                None,
+                (
+                    "Tavily map failed during crawl fallback, scraping seed URL only: "
+                    f"elapsed_ms={map_meta['elapsed_ms']} reason={reason}"
+                ),
+                True,
+            )
             if config.debug_enabled:
                 await log_exception(None, "Tavily map failed during crawl fallback", e, True)
 
     semaphore = asyncio.Semaphore(3)
 
-    async def _fetch_for_crawl(target_url: str) -> tuple[str, str, str, str]:
+    async def _fetch_for_crawl(target_url: str) -> tuple[str, str, str, str, dict]:
         async with semaphore:
-            content, provider, reason = await _compat_fetch_url(
+            content, provider, reason, fetch_meta = await _compat_fetch_url_with_meta(
                 target_url,
                 query=instructions,
                 chunks_per_source=chunks_per_source,
@@ -1491,16 +1833,19 @@ async def _compat_crawl_payload(body: dict) -> dict:
                 format_mode=format_mode,
                 timeout=timeout,
             )
-            return target_url, content, provider, reason
+            return target_url, content, provider, reason, fetch_meta
 
     fetched = await asyncio.gather(*[_fetch_for_crawl(item) for item in urls[:limit]])
+    fetch_metas = [item[4] for item in fetched]
 
     results: list[dict] = []
-    for target_url, content, provider, reason in fetched:
+    for target_url, content, provider, reason, fetch_meta in fetched:
         if not content.strip():
             continue
 
         item = {"url": target_url, "raw_content": content}
+        if provider:
+            item["source"] = provider
         if provider == "tavily":
             favicon = ""
         else:
@@ -1510,22 +1855,51 @@ async def _compat_crawl_payload(body: dict) -> dict:
         results.append(item)
 
     if not results:
+        crawl_sources = [item for item in (crawl_attempt_meta, map_meta) if item is not None]
+        crawl_sources.extend(_aggregate_fetch_channel_stats(fetch_metas))
+        elapsed = time.perf_counter() - started
+        await log_info(
+            None,
+            (
+                f"Compatible crawl: mode=local status=failed url={url!r} discovered={len(urls)} results=0 "
+                f"elapsed_ms={round(elapsed * 1000)}; channels={_format_compat_sources_summary(crawl_sources)}; "
+                f"routes={_format_fetch_route_summary(fetch_metas)}"
+            ),
+            True,
+        )
         raise RuntimeError("Crawl returned no results")
+
+    crawl_sources = [item for item in (crawl_attempt_meta, map_meta) if item is not None]
+    crawl_sources.extend(_aggregate_fetch_channel_stats(fetch_metas))
+    elapsed = time.perf_counter() - started
+    for source in crawl_sources:
+        if source.get("provider") in {"tavily", "firecrawl"} and source.get("operation") in {"extract", "scrape"}:
+            source["selected"] = sum(1 for item in results if item.get("source") == source["provider"])
 
     payload = {
         "base_url": base_url,
         "results": results,
-        "response_time": round(time.perf_counter() - started, 3),
+        "response_time": round(elapsed, 3),
         "request_id": request_id,
+        "crawl_sources": crawl_sources,
     }
     if include_usage:
         payload["usage"] = {"credits": 0}
     if fallback_reason:
         payload["fallback"] = {
             "from": "tavily",
-            "to": "firecrawl",
+            "to": "local",
             "reason": _clean_proxy_text(fallback_reason, collapse_whitespace=True),
         }
+    await log_info(
+        None,
+        (
+            f"Compatible crawl: mode=local status=success url={url!r} discovered={len(urls)} "
+            f"results={len(results)} elapsed_ms={round(elapsed * 1000)}; "
+            f"channels={_format_compat_sources_summary(crawl_sources)}; routes={_format_fetch_route_summary(fetch_metas)}"
+        ),
+        True,
+    )
     return payload
 
 
