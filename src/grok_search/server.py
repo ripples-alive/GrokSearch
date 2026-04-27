@@ -1,4 +1,9 @@
+import json
+import html
+import re
 import sys
+import time
+import uuid
 from pathlib import Path
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -19,18 +24,30 @@ try:
     from grok_search.config import config
     from grok_search.sources import SourcesCache, merge_sources, new_session_id, split_answer_and_sources
     from grok_search.planning import engine as planning_engine, _split_csv
+    from grok_search.utils import extract_unique_urls
 except ImportError:
     from .providers.grok import GrokSearchProvider
     from .logger import log_exception, log_info
     from .config import config
     from .sources import SourcesCache, merge_sources, new_session_id, split_answer_and_sources
     from .planning import engine as planning_engine, _split_csv
+    from .utils import extract_unique_urls
 
 import asyncio
 
 _SOURCES_CACHE = SourcesCache(max_size=256)
 _AVAILABLE_MODELS_CACHE: dict[tuple[str, str], list[str]] = {}
 _AVAILABLE_MODELS_LOCK = asyncio.Lock()
+_URL_CLEAN_RE = re.compile(r"https?://[^\s<>\"']+")
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_MULTISPACE_RE = re.compile(r"\s+")
+
+
+class CompatHTTPError(Exception):
+    def __init__(self, status_code: int, message: str, payload: dict | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.payload = payload or {"detail": {"error": message}}
 
 
 def _build_auth_provider():
@@ -63,6 +80,8 @@ def build_mcp() -> FastMCP:
                 "transport": config.mcp_transport,
                 "streamable_http_path": config.mcp_streamable_http_path,
                 "sse_path": config.mcp_sse_path,
+                "tavily_compatible_paths": ["/search", "/extract", "/crawl"],
+                "tavily_compatible_auth_enabled": bool(config.mcp_bearer_token),
                 "auth_enabled": bool(config.mcp_bearer_token),
                 "debug_enabled": config.debug_enabled,
                 "log_level": config.log_level,
@@ -152,6 +171,1416 @@ def _extra_results_to_sources(
             sources.append(item)
 
     return sources
+
+
+def _json_response(payload: dict, status_code: int = 200) -> JSONResponse:
+    return JSONResponse(content=payload, status_code=status_code)
+
+
+def _json_error(message: str, status_code: int = 400, error_type: str = "bad_request") -> JSONResponse:
+    return _json_response({"detail": {"error": message}}, status_code=status_code)
+
+
+async def _read_json_body(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON body: {e.msg}") from e
+    except Exception as e:
+        raise ValueError(f"Invalid JSON body: {e}") from e
+
+    if not isinstance(body, dict):
+        raise ValueError("JSON body must be an object")
+    return body
+
+
+def _extract_request_token(request: Request, body: dict) -> str | None:
+    auth = (request.headers.get("authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+
+    for header in ("x-api-key", "api-key"):
+        value = (request.headers.get(header) or "").strip()
+        if value:
+            return value
+
+    for key in ("api_key", "apikey", "token"):
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _compat_auth_error(request: Request, body: dict) -> JSONResponse | None:
+    expected = config.mcp_bearer_token
+    if not expected:
+        return None
+
+    token = _extract_request_token(request, body)
+    if token == expected:
+        return None
+    return _json_error("Unauthorized: missing or invalid API key.", status_code=401, error_type="unauthorized")
+
+
+def _as_str(value, default: str = "") -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _as_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return default
+
+
+def _as_int(value, default: int, minimum: int = 1, maximum: int = 50) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _as_float(value, default: float, minimum: float | None = None, maximum: float | None = None) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(maximum, parsed)
+    return parsed
+
+
+def _as_str_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _normalize_domain_list(value) -> list[str]:
+    from urllib.parse import urlparse
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in _as_str_list(value):
+        domain = raw.strip().lower()
+        if not domain:
+            continue
+        if "://" in domain:
+            domain = urlparse(domain).hostname or ""
+        else:
+            domain = domain.split("/", 1)[0]
+        domain = domain.strip().strip(".")
+        if domain.startswith("*."):
+            domain = domain[2:]
+        if not domain or domain in seen:
+            continue
+        seen.add(domain)
+        normalized.append(domain)
+    return normalized
+
+
+def _domain_allowed(url: str, include_domains: list[str], exclude_domains: list[str]) -> bool:
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return False
+
+    def _matches(domain: str) -> bool:
+        normalized = domain.lower().strip()
+        if not normalized:
+            return False
+        return host == normalized or host.endswith(f".{normalized}")
+
+    if include_domains and not any(_matches(domain) for domain in include_domains):
+        return False
+    if exclude_domains and any(_matches(domain) for domain in exclude_domains):
+        return False
+    return True
+
+
+def _build_domain_search_query(
+    query: str,
+    *,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+    include_domain: str | None = None,
+) -> str:
+    include_domains = include_domains or []
+    exclude_domains = exclude_domains or []
+    terms: list[str] = []
+    if include_domain:
+        terms.append(f"site:{include_domain}")
+    elif include_domains:
+        if len(include_domains) == 1:
+            terms.append(f"site:{include_domains[0]}")
+        else:
+            terms.append("(" + " OR ".join(f"site:{domain}" for domain in include_domains) + ")")
+    terms.extend(f"-site:{domain}" for domain in exclude_domains)
+    terms.append(query)
+    return " ".join(item for item in terms if item).strip()
+
+
+def _build_grok_search_query(query: str, include_domains: list[str], exclude_domains: list[str]) -> str:
+    constrained = _build_domain_search_query(
+        query,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+    )
+    if not include_domains and not exclude_domains:
+        return constrained
+
+    constraints: list[str] = []
+    if include_domains:
+        constraints.append("Only cite and return sources from these domains: " + ", ".join(include_domains) + ".")
+    if exclude_domains:
+        constraints.append("Do not cite or return sources from these domains: " + ", ".join(exclude_domains) + ".")
+    return constrained + "\n\nSearch constraints: " + " ".join(constraints)
+
+
+def _build_firecrawl_search_query(query: str, include_domain: str | None = None) -> str:
+    if not include_domain:
+        return query.strip()
+
+    # Keep Firecrawl as a single-pass parallel branch. If the upstream returns
+    # empty for site: queries, Tavily/Grok can still provide results.
+    return f"site:{include_domain} {query}".strip()
+
+
+def _compat_search_fetch_limit(max_results: int, has_domain_filters: bool, provider: str) -> int:
+    if max_results <= 0:
+        return 0
+    if not has_domain_filters:
+        return max_results
+    if provider == "firecrawl":
+        return min(50, max(max_results, max_results * 5))
+    return min(20, max(max_results, max_results * 4))
+
+
+def _dedupe_search_items(items: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for item in items:
+        url = _clean_proxy_url(item.get("url"))
+        if not url:
+            continue
+        key = _result_key(url)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _source_to_tavily_result(source: dict, index: int, include_raw_content: bool = False) -> dict:
+    url = _as_str(source.get("url")).strip()
+    title = _as_str(source.get("title") or source.get("name") or url).strip() or url
+    content = _as_str(
+        source.get("content")
+        or source.get("description")
+        or source.get("snippet")
+        or source.get("extract")
+        or source.get("extracts")
+    ).strip()
+    result = {
+        "title": title,
+        "url": url,
+        "content": content,
+        "score": max(0.0, round(1.0 - index * 0.01, 4)),
+    }
+    if include_raw_content:
+        result["raw_content"] = _as_str(source.get("raw_content") or content)
+    return result
+
+
+def _parse_map_urls(payload: str, seed_url: str, limit: int) -> tuple[str, list[str]]:
+    base_url = seed_url
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def _add(url: str) -> None:
+        clean = (url or "").strip()
+        if not clean.startswith(("http://", "https://")) or clean in seen:
+            return
+        seen.add(clean)
+        urls.append(clean)
+
+    _add(seed_url)
+
+    try:
+        data = json.loads(payload)
+    except (TypeError, json.JSONDecodeError):
+        return base_url, urls[:limit]
+
+    if isinstance(data, dict):
+        base_url = _as_str(data.get("base_url") or seed_url).strip() or seed_url
+        items = data.get("results") or data.get("urls") or []
+    else:
+        items = data
+
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, str):
+                _add(item)
+            elif isinstance(item, dict):
+                _add(_as_str(item.get("url") or item.get("href") or item.get("link")))
+            if len(urls) >= limit:
+                break
+
+    return base_url, urls[:limit]
+
+
+def _title_from_markdown(content: str, fallback: str) -> str:
+    for line in (content or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            title = stripped.lstrip("#").strip()
+            if title:
+                return title[:200]
+    return fallback
+
+
+def _new_request_id() -> str:
+    return str(uuid.uuid4())
+
+
+def _should_include_answer(value) -> bool:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"basic", "advanced"}:
+            return True
+    return _as_bool(value, default=False)
+
+
+def _normalize_raw_content_mode(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "markdown" if value else None
+    normalized = _as_str(value).strip().lower()
+    if normalized in {"", "false", "0", "off", "no"}:
+        return None
+    if normalized in {"true", "1", "yes", "on", "markdown"}:
+        return "markdown"
+    if normalized == "text":
+        return "text"
+    raise ValueError("Invalid include_raw_content. Must be boolean, 'markdown', or 'text'.")
+
+
+def _strip_compat_auth_fields(body: dict) -> dict:
+    sanitized = dict(body)
+    for key in ("api_key", "apikey", "token"):
+        sanitized.pop(key, None)
+    return sanitized
+
+
+def _extract_error_message(payload: dict | None, fallback: str) -> str:
+    if isinstance(payload, dict):
+        detail = payload.get("detail")
+        if isinstance(detail, dict):
+            message = detail.get("error")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+        message = payload.get("error")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    return fallback
+
+
+def _clean_proxy_url(value) -> str:
+    raw = html.unescape(_as_str(value)).strip()
+    if not raw:
+        return ""
+
+    match = _URL_CLEAN_RE.search(raw)
+    if not match:
+        return ""
+
+    return match.group(0).rstrip(".,;:!?)")
+
+
+def _clean_proxy_text(value, *, collapse_whitespace: bool = True) -> str:
+    text = html.unescape(_as_str(value)).replace("\x00", " ").strip()
+    if not text:
+        return ""
+
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = text.replace('">', " ").replace("'>", " ")
+    if collapse_whitespace:
+        text = _MULTISPACE_RE.sub(" ", text)
+    return text.strip()
+
+
+def _coerce_number(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_top_images(items, *, include_descriptions: bool) -> list:
+    normalized: list = []
+    if not isinstance(items, list):
+        return normalized
+
+    for item in items:
+        if isinstance(item, str):
+            url = _clean_proxy_url(item)
+            if url:
+                normalized.append(url if not include_descriptions else {"url": url, "description": ""})
+            continue
+
+        if not isinstance(item, dict):
+            continue
+
+        url = _clean_proxy_url(item.get("url"))
+        if not url:
+            continue
+
+        if include_descriptions:
+            normalized.append(
+                {
+                    "url": url,
+                    "description": _clean_proxy_text(item.get("description"), collapse_whitespace=True),
+                }
+            )
+        else:
+            normalized.append(url)
+
+    return normalized
+
+
+def _normalize_result_images(items, *, include_descriptions: bool) -> list[dict]:
+    normalized: list[dict] = []
+    if not isinstance(items, list):
+        return normalized
+
+    for item in items:
+        if isinstance(item, str):
+            url = _clean_proxy_url(item)
+            if url:
+                entry = {"url": url}
+                if include_descriptions:
+                    entry["description"] = ""
+                normalized.append(entry)
+            continue
+
+        if not isinstance(item, dict):
+            continue
+
+        url = _clean_proxy_url(item.get("url"))
+        if not url:
+            continue
+
+        entry = {"url": url}
+        if include_descriptions:
+            entry["description"] = _clean_proxy_text(item.get("description"), collapse_whitespace=True)
+        normalized.append(entry)
+
+    return normalized
+
+
+def _normalize_tavily_search_payload(payload: dict, request_body: dict, elapsed: float) -> dict:
+    include_raw_content = _normalize_raw_content_mode(request_body.get("include_raw_content"))
+    include_favicon = _as_bool(request_body.get("include_favicon"), default=False)
+    include_images = _as_bool(request_body.get("include_images"), default=False)
+    include_image_descriptions = _as_bool(request_body.get("include_image_descriptions"), default=False)
+    include_usage = _as_bool(request_body.get("include_usage"), default=False)
+    include_answer = _should_include_answer(request_body.get("include_answer"))
+
+    seen_urls: set[str] = set()
+    results: list[dict] = []
+    for item in payload.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+
+        url = _clean_proxy_url(item.get("url"))
+        if not url or url in seen_urls:
+            continue
+
+        title = _clean_proxy_text(item.get("title"), collapse_whitespace=True) or url
+        content = _clean_proxy_text(item.get("content"), collapse_whitespace=True)
+        result = {
+            "title": title,
+            "url": url,
+            "content": content,
+            "score": _coerce_number(item.get("score"), 0.0),
+        }
+
+        if include_raw_content:
+            raw_content = item.get("raw_content")
+            if isinstance(raw_content, str) and raw_content.strip():
+                result["raw_content"] = html.unescape(raw_content).strip()
+
+        if include_favicon:
+            favicon = _clean_proxy_url(item.get("favicon"))
+            if favicon:
+                result["favicon"] = favicon
+
+        if include_images:
+            images = _normalize_result_images(item.get("images"), include_descriptions=include_image_descriptions)
+            if images:
+                result["images"] = images
+
+        seen_urls.add(url)
+        results.append(result)
+
+    if not results:
+        raise RuntimeError("Tavily upstream returned no usable search results")
+
+    normalized = {
+        "query": _as_str(payload.get("query") or request_body.get("query")).strip(),
+        "answer": payload.get("answer") if include_answer else None,
+        "images": _normalize_top_images(payload.get("images"), include_descriptions=include_image_descriptions) if include_images else [],
+        "results": results,
+        "response_time": round(_coerce_number(payload.get("response_time"), elapsed) or elapsed, 3),
+        "request_id": _as_str(payload.get("request_id")).strip() or _new_request_id(),
+    }
+
+    if include_answer and isinstance(normalized["answer"], str):
+        normalized["answer"] = _clean_proxy_text(normalized["answer"], collapse_whitespace=False)
+
+    auto_parameters = payload.get("auto_parameters")
+    if isinstance(auto_parameters, dict):
+        normalized["auto_parameters"] = auto_parameters
+
+    usage = payload.get("usage")
+    if include_usage and isinstance(usage, dict):
+        normalized["usage"] = usage
+
+    return normalized
+
+
+def _normalize_tavily_extract_payload(payload: dict, request_body: dict, elapsed: float) -> dict:
+    include_images = _as_bool(request_body.get("include_images"), default=False)
+    include_favicon = _as_bool(request_body.get("include_favicon"), default=False)
+    include_usage = _as_bool(request_body.get("include_usage"), default=False)
+
+    results: list[dict] = []
+    for item in payload.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        url = _clean_proxy_url(item.get("url"))
+        if not url:
+            continue
+        entry = {"url": url, "raw_content": html.unescape(_as_str(item.get("raw_content"))).strip()}
+        if include_images:
+            images = _normalize_top_images(item.get("images"), include_descriptions=False)
+            if images:
+                entry["images"] = images
+        if include_favicon:
+            favicon = _clean_proxy_url(item.get("favicon"))
+            if favicon:
+                entry["favicon"] = favicon
+        results.append(entry)
+
+    failed_results: list[dict] = []
+    for item in payload.get("failed_results") or []:
+        if not isinstance(item, dict):
+            continue
+        url = _clean_proxy_url(item.get("url"))
+        error = _clean_proxy_text(item.get("error"), collapse_whitespace=True)
+        if url:
+            failed_results.append({"url": url, "error": error or "Unknown error"})
+
+    normalized = {
+        "results": results,
+        "failed_results": failed_results,
+        "response_time": round(_coerce_number(payload.get("response_time"), elapsed) or elapsed, 3),
+        "request_id": _as_str(payload.get("request_id")).strip() or _new_request_id(),
+    }
+
+    usage = payload.get("usage")
+    if include_usage and isinstance(usage, dict):
+        normalized["usage"] = usage
+
+    return normalized
+
+
+def _normalize_tavily_crawl_payload(payload: dict, request_body: dict, elapsed: float) -> dict:
+    include_favicon = _as_bool(request_body.get("include_favicon"), default=False)
+    include_usage = _as_bool(request_body.get("include_usage"), default=False)
+
+    results: list[dict] = []
+    for item in payload.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        url = _clean_proxy_url(item.get("url"))
+        if not url:
+            continue
+        entry = {"url": url, "raw_content": html.unescape(_as_str(item.get("raw_content"))).strip()}
+        if include_favicon:
+            favicon = _clean_proxy_url(item.get("favicon"))
+            if favicon:
+                entry["favicon"] = favicon
+        results.append(entry)
+
+    if not results:
+        raise RuntimeError("Tavily upstream returned no usable crawl results")
+
+    normalized = {
+        "base_url": _clean_proxy_url(payload.get("base_url") or request_body.get("url")) or _as_str(request_body.get("url")).strip(),
+        "results": results,
+        "response_time": round(_coerce_number(payload.get("response_time"), elapsed) or elapsed, 3),
+        "request_id": _as_str(payload.get("request_id")).strip() or _new_request_id(),
+    }
+
+    usage = payload.get("usage")
+    if include_usage and isinstance(usage, dict):
+        normalized["usage"] = usage
+
+    return normalized
+
+
+def _normalize_tavily_proxy_payload(path: str, payload: dict, request_body: dict, elapsed: float) -> dict:
+    if path == "/search":
+        return _normalize_tavily_search_payload(payload, request_body, elapsed)
+    if path == "/extract":
+        return _normalize_tavily_extract_payload(payload, request_body, elapsed)
+    if path == "/crawl":
+        return _normalize_tavily_crawl_payload(payload, request_body, elapsed)
+    return payload
+
+
+async def _proxy_tavily_post(path: str, body: dict, timeout: float) -> dict:
+    import httpx
+
+    if not config.tavily_api_key:
+        raise RuntimeError("TAVILY_API_KEY is not configured")
+
+    endpoint = f"{config.tavily_api_url.rstrip('/')}{path}"
+    headers = {
+        "Authorization": f"Bearer {config.tavily_api_key}",
+        "Content-Type": "application/json",
+    }
+    sanitized_body = _strip_compat_auth_fields(body)
+    started = time.perf_counter()
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(endpoint, headers=headers, json=sanitized_body)
+    except Exception as e:
+        raise RuntimeError(f"Tavily upstream request failed: {e}") from e
+
+    payload: dict | None
+    try:
+        parsed = response.json()
+        payload = parsed if isinstance(parsed, dict) else {"data": parsed}
+    except ValueError:
+        payload = None
+
+    if response.status_code >= 400:
+        message = _extract_error_message(payload, response.text[:500] or f"[{response.status_code}] upstream error")
+        raise CompatHTTPError(response.status_code, message, payload or {"detail": {"error": message}})
+
+    if payload is None:
+        raise RuntimeError("Tavily upstream returned a non-JSON response")
+
+    elapsed = time.perf_counter() - started
+    return _normalize_tavily_proxy_payload(path, payload, sanitized_body, elapsed)
+
+
+def _result_text_from_source(source: dict) -> str:
+    return _as_str(
+        source.get("content")
+        or source.get("description")
+        or source.get("snippet")
+        or source.get("extract")
+        or source.get("extracts")
+    ).strip()
+
+
+def _compat_score(index: int) -> float:
+    return max(0.0, round(1.0 - index * 0.01, 4))
+
+
+def _search_branch_meta(provider: str, status: str, *, count: int = 0, reason: str = "") -> dict:
+    meta = {
+        "provider": provider,
+        "status": status,
+        "count": count,
+        "elapsed_ms": 0,
+        "kept": 0,
+        "selected": 0,
+        "filtered": 0,
+        "deduped": 0,
+    }
+    clean_reason = _clean_proxy_text(reason, collapse_whitespace=True)
+    if clean_reason:
+        meta["reason"] = clean_reason
+    return meta
+
+
+_SEARCH_PROVIDER_WEIGHTS = {"grok": 1.08, "tavily": 1.0, "firecrawl": 0.92}
+_SEARCH_PROVIDER_PRIORITY = {"grok": 0, "tavily": 1, "firecrawl": 2}
+_SEARCH_CONFIRMATION_WEIGHTS = {1: 1.0, 2: 1.25, 3: 1.45}
+
+
+def _compute_search_source_targets(total: int, available_providers: set[str], *, has_domain_filters: bool = False) -> dict[str, int]:
+    targets = {"grok": 0, "tavily": 0, "firecrawl": 0}
+    if total <= 0 or not available_providers:
+        return targets
+
+    for provider in available_providers:
+        targets[provider] = _compat_search_fetch_limit(total, has_domain_filters, provider)
+
+    return targets
+
+
+def _rank_based_score(index: int, total: int, *, top: float = 0.95, floor: float = 0.35) -> float:
+    if total <= 1:
+        return top
+    step = (top - floor) / max(total - 1, 1)
+    return max(floor, top - index * step)
+
+
+def _normalized_search_score(value, fallback: float) -> float:
+    score = _coerce_number(value, fallback)
+    if score > 1.0 and score <= 100.0:
+        score = score / 100.0
+    return max(0.0, min(1.0, score))
+
+
+def _result_key(url: str) -> str:
+    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return url.rstrip("/")
+    scheme = (parsed.scheme or "https").lower()
+    path = parsed.path.rstrip("/") or "/"
+    query_items = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_") and key.lower() not in {"fbclid", "gclid"}
+    ]
+    query = urlencode(query_items, doseq=True)
+    return urlunparse((scheme, host, path, "", query, ""))
+
+
+def _best_result_provider(provider_scores: dict[str, float]) -> str:
+    if not provider_scores:
+        return ""
+    return max(
+        provider_scores,
+        key=lambda provider: (
+            provider_scores[provider] * _SEARCH_PROVIDER_WEIGHTS.get(provider, 1.0),
+            -_SEARCH_PROVIDER_PRIORITY.get(provider, 99),
+        ),
+    )
+
+
+def _apply_result_confidence(item: dict) -> None:
+    provider_scores = item.get("_provider_scores") or {}
+    if not provider_scores:
+        item["_confidence_raw"] = 0.0
+        item["score"] = 0.0
+        return
+
+    provider_count = len(provider_scores)
+    weighted_average = sum(
+        score * _SEARCH_PROVIDER_WEIGHTS.get(provider, 1.0)
+        for provider, score in provider_scores.items()
+    ) / provider_count
+    confirmation_weight = _SEARCH_CONFIRMATION_WEIGHTS.get(provider_count, _SEARCH_CONFIRMATION_WEIGHTS[3])
+    confidence_raw = weighted_average * confirmation_weight
+    item["_confidence_raw"] = confidence_raw
+    item["score"] = round(min(1.0, confidence_raw), 6)
+
+
+async def _build_grok_provider(model: str = "") -> GrokSearchProvider:
+    api_url = config.grok_api_url
+    api_key = config.grok_api_key
+    effective_model = config.grok_model
+
+    if model:
+        available = await _get_available_models_cached(api_url, api_key)
+        if available and model not in available:
+            raise ValueError(f"无效模型: {model}")
+        effective_model = model
+
+    return GrokSearchProvider(api_url, api_key, effective_model)
+
+
+async def _compat_fetch_url(
+    url: str,
+    *,
+    query: str = "",
+    chunks_per_source: int = 3,
+    extract_depth: str = "basic",
+    format_mode: str = "markdown",
+    timeout: float | None = None,
+) -> tuple[str, str, str]:
+    tavily_result = await _call_tavily_extract(
+        url,
+        query=query,
+        chunks_per_source=chunks_per_source,
+        extract_depth=extract_depth,
+        format_mode=format_mode,
+        timeout=timeout,
+    )
+    if tavily_result["status"] == "success":
+        return tavily_result["content"], "tavily", ""
+
+    firecrawl_result = await _call_firecrawl_scrape(url)
+    if firecrawl_result["status"] == "success":
+        return firecrawl_result["content"], "firecrawl", ""
+
+    reasons = [
+        _as_str(tavily_result.get("reason")).strip(),
+        _as_str(firecrawl_result.get("reason")).strip(),
+    ]
+    reason = " | ".join([item for item in reasons if item]) or "No content returned"
+    return "", "", reason
+
+
+async def _compat_search_payload(body: dict) -> dict:
+    query = _as_str(body.get("query")).strip()
+    if not query:
+        raise ValueError("Missing required field: query")
+
+    max_results = _as_int(body.get("max_results") or body.get("limit"), default=5, minimum=0, maximum=20)
+    include_answer = _should_include_answer(body.get("include_answer"))
+    raw_content_mode = _normalize_raw_content_mode(body.get("include_raw_content"))
+    include_favicon = _as_bool(body.get("include_favicon"), default=False)
+    include_images = _as_bool(body.get("include_images"), default=False)
+    include_image_descriptions = _as_bool(body.get("include_image_descriptions"), default=False)
+    include_domains = _normalize_domain_list(body.get("include_domains"))
+    exclude_domains = _normalize_domain_list(body.get("exclude_domains"))
+    include_usage = _as_bool(body.get("include_usage"), default=False)
+    chunks_per_source = _as_int(body.get("chunks_per_source"), default=3, minimum=1, maximum=3)
+    search_depth = _as_str(body.get("search_depth") or "basic").strip().lower() or "basic"
+    platform = _as_str(body.get("platform") or body.get("topic")).strip()
+    model = _as_str(body.get("model")).strip()
+
+    started = time.perf_counter()
+    request_id = _new_request_id()
+    branch_meta: list[dict] = []
+    branch_meta_by_provider: dict[str, dict] = {}
+    available_providers: set[str] = set()
+    try:
+        config.grok_api_url
+        config.grok_api_key
+        available_providers.add("grok")
+    except ValueError:
+        pass
+    if config.tavily_api_key:
+        available_providers.add("tavily")
+    if config.firecrawl_api_key:
+        available_providers.add("firecrawl")
+    has_domain_filters = bool(include_domains or exclude_domains)
+    search_targets = _compute_search_source_targets(
+        max_results,
+        available_providers,
+        has_domain_filters=has_domain_filters,
+    )
+
+    def _set_branch_meta(meta: dict) -> None:
+        existing = branch_meta_by_provider.get(meta["provider"])
+        if existing is None:
+            branch_meta_by_provider[meta["provider"]] = meta
+            branch_meta.append(meta)
+            return
+        existing.update(meta)
+
+    def _finish_branch_meta(meta: dict, started_at: float) -> dict:
+        meta["elapsed_ms"] = round((time.perf_counter() - started_at) * 1000)
+        meta["target"] = meta.get("planned", 0)
+        _set_branch_meta(meta)
+        return meta
+
+    async def _safe_tavily_search() -> dict | None:
+        branch_started = time.perf_counter()
+        if not config.tavily_api_key:
+            meta = _search_branch_meta("tavily", "disabled")
+            meta["planned"] = 0
+            _finish_branch_meta(meta, branch_started)
+            return None
+        if search_targets["tavily"] <= 0:
+            meta = _search_branch_meta("tavily", "skipped")
+            meta["planned"] = 0
+            meta["reason"] = "planned fetch target is zero"
+            _finish_branch_meta(meta, branch_started)
+            return None
+        tavily_body = dict(body)
+        tavily_body["include_answer"] = False
+        tavily_body["max_results"] = search_targets["tavily"]
+        tavily_body["include_domains"] = include_domains
+        tavily_body["exclude_domains"] = exclude_domains
+        try:
+            payload = await _proxy_tavily_post("/search", tavily_body, timeout=90.0)
+            meta = _search_branch_meta("tavily", "success", count=len(payload.get("results") or []))
+            meta["planned"] = search_targets["tavily"]
+            _finish_branch_meta(meta, branch_started)
+            return payload
+        except Exception as e:
+            meta = _search_branch_meta("tavily", "failed", reason=str(e))
+            meta["planned"] = search_targets["tavily"]
+            _finish_branch_meta(meta, branch_started)
+            if config.debug_enabled:
+                await log_exception(None, "Combined search Tavily branch failed", e, True)
+            return None
+
+    async def _safe_firecrawl_search() -> list[dict] | None:
+        branch_started = time.perf_counter()
+        if not config.firecrawl_api_key:
+            meta = _search_branch_meta("firecrawl", "disabled")
+            meta["planned"] = 0
+            _finish_branch_meta(meta, branch_started)
+            return None
+        if search_targets["firecrawl"] <= 0:
+            meta = _search_branch_meta("firecrawl", "skipped")
+            meta["planned"] = 0
+            meta["reason"] = "planned fetch target is zero"
+            _finish_branch_meta(meta, branch_started)
+            return None
+        try:
+            payload = await _call_firecrawl_search(
+                query,
+                search_targets["firecrawl"],
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+            )
+            meta = _search_branch_meta("firecrawl", "success" if payload else "empty", count=len(payload or []))
+            meta["planned"] = search_targets["firecrawl"]
+            _finish_branch_meta(meta, branch_started)
+            return payload
+        except Exception as e:
+            meta = _search_branch_meta("firecrawl", "failed", reason=str(e))
+            meta["planned"] = search_targets["firecrawl"]
+            _finish_branch_meta(meta, branch_started)
+            if config.debug_enabled:
+                await log_exception(None, "Combined search Firecrawl branch failed", e, True)
+            return None
+
+    async def _safe_grok_search() -> tuple[GrokSearchProvider | None, str]:
+        branch_started = time.perf_counter()
+        if "grok" not in available_providers:
+            meta = _search_branch_meta("grok", "disabled")
+            meta["planned"] = 0
+            meta["reason"] = "GROK_API_URL or GROK_API_KEY is not configured"
+            _finish_branch_meta(meta, branch_started)
+            return None, ""
+        if search_targets["grok"] <= 0:
+            meta = _search_branch_meta("grok", "skipped")
+            meta["planned"] = 0
+            meta["reason"] = "planned fetch target is zero"
+            _finish_branch_meta(meta, branch_started)
+            return None, ""
+        try:
+            provider = await _build_grok_provider(model)
+        except Exception as e:
+            meta = _search_branch_meta("grok", "failed", reason=str(e))
+            meta["planned"] = search_targets["grok"]
+            _finish_branch_meta(meta, branch_started)
+            if config.debug_enabled:
+                await log_exception(None, "Combined search Grok provider build failed", e, True)
+            return None, ""
+
+        try:
+            payload = await provider.search(_build_grok_search_query(query, include_domains, exclude_domains), platform, ctx=None)
+            meta = _search_branch_meta("grok", "success" if payload.strip() else "empty")
+            meta["planned"] = search_targets["grok"]
+            _finish_branch_meta(meta, branch_started)
+            return provider, payload
+        except Exception as e:
+            meta = _search_branch_meta("grok", "failed", reason=str(e))
+            meta["planned"] = search_targets["grok"]
+            _finish_branch_meta(meta, branch_started)
+            if config.debug_enabled:
+                await log_exception(None, "Combined search Grok branch failed", e, True)
+            return provider, ""
+
+    tavily_payload, firecrawl_results, grok_result = await asyncio.gather(
+        _safe_tavily_search(),
+        _safe_firecrawl_search(),
+        _safe_grok_search(),
+    )
+
+    grok_provider, grok_raw = grok_result
+    answer, grok_sources = split_answer_and_sources(grok_raw)
+    grok_candidate_keys = {
+        _result_key(url)
+        for url in [
+            *[_clean_proxy_url(source.get("url")) for source in grok_sources],
+            *(extract_unique_urls(grok_raw) if grok_raw else []),
+        ]
+        if url
+    }
+    grok_candidate_count = len(grok_candidate_keys)
+    if "grok" in branch_meta_by_provider:
+        branch_meta_by_provider["grok"]["count"] = grok_candidate_count
+
+    top_images = []
+    auto_parameters = None
+    usage = {"credits": 0} if include_usage else None
+    if tavily_payload:
+        top_images = tavily_payload.get("images", []) if include_images else []
+        auto_parameters = tavily_payload.get("auto_parameters")
+        if include_usage and isinstance(tavily_payload.get("usage"), dict):
+            usage = tavily_payload["usage"]
+
+    combined_by_url: dict[str, dict] = {}
+    combined_order: list[str] = []
+
+    def _merge_result(item: dict, provider: str, fallback_score: float) -> None:
+        meta = branch_meta_by_provider.get(provider)
+        if meta is None:
+            meta = _search_branch_meta(provider, "success")
+            _set_branch_meta(meta)
+
+        url = _clean_proxy_url(item.get("url"))
+        if not url:
+            meta["filtered"] += 1
+            return
+        if not _domain_allowed(url, include_domains, exclude_domains):
+            meta["filtered"] += 1
+            return
+
+        result_key = _result_key(url)
+        title = _clean_proxy_text(item.get("title") or item.get("name") or url, collapse_whitespace=True) or url
+        content = _clean_proxy_text(
+            item.get("content")
+            or item.get("description")
+            or item.get("snippet")
+            or item.get("extract")
+            or item.get("extracts"),
+            collapse_whitespace=True,
+        )
+        score = _normalized_search_score(item.get("score"), fallback_score)
+        priority = _SEARCH_PROVIDER_PRIORITY.get(provider, 9)
+        existing = combined_by_url.get(result_key)
+
+        if existing is None:
+            entry = {
+                "title": title,
+                "url": url,
+                "content": content,
+                "score": score,
+                "source": provider,
+                "_priority": priority,
+                "_sources": [provider],
+                "_provider_scores": {provider: score},
+            }
+            raw_content = item.get("raw_content")
+            if raw_content_mode and isinstance(raw_content, str) and raw_content.strip():
+                entry["raw_content"] = html.unescape(raw_content).strip()
+            if include_favicon:
+                favicon = _clean_proxy_url(item.get("favicon"))
+                if favicon:
+                    entry["favicon"] = favicon
+            if include_images:
+                images = _normalize_result_images(item.get("images"), include_descriptions=include_image_descriptions)
+                if images:
+                    entry["images"] = images
+
+            combined_by_url[result_key] = entry
+            combined_order.append(result_key)
+            meta["kept"] += 1
+            return
+
+        meta["deduped"] += 1
+        old_priority = existing["_priority"]
+        existing["_priority"] = min(old_priority, priority)
+        provider_scores = existing.setdefault("_provider_scores", {})
+        provider_scores[provider] = max(provider_scores.get(provider, 0.0), score)
+        if provider not in existing["_sources"]:
+            existing["_sources"].append(provider)
+
+        if title and (
+            existing.get("title") == existing["url"]
+            or (priority < old_priority)
+        ):
+            existing["title"] = title
+            existing["source"] = provider
+        if content and (
+            not existing.get("content")
+            or (priority < old_priority)
+            or len(content) > len(existing.get("content", ""))
+        ):
+            existing["content"] = content
+            if priority <= old_priority:
+                existing["source"] = provider
+        if raw_content_mode and "raw_content" not in existing:
+            raw_content = item.get("raw_content")
+            if isinstance(raw_content, str) and raw_content.strip():
+                existing["raw_content"] = html.unescape(raw_content).strip()
+        if include_favicon and "favicon" not in existing:
+            favicon = _clean_proxy_url(item.get("favicon"))
+            if favicon:
+                existing["favicon"] = favicon
+        if include_images and "images" not in existing:
+            images = _normalize_result_images(item.get("images"), include_descriptions=include_image_descriptions)
+            if images:
+                existing["images"] = images
+
+    for idx, item in enumerate((tavily_payload or {}).get("results") or []):
+        _merge_result(item, "tavily", _compat_score(idx))
+
+    for idx, item in enumerate(firecrawl_results or []):
+        _merge_result(item, "firecrawl", max(0.0, 0.55 - idx * 0.01))
+
+    for idx, source in enumerate(grok_sources):
+        _merge_result(source, "grok", max(0.0, 0.4 - idx * 0.01))
+
+    if grok_raw and max_results > 0:
+        for url in extract_unique_urls(grok_raw):
+            _merge_result({"url": url, "title": url, "content": ""}, "grok", 0.2)
+
+    combined_results = [combined_by_url[url] for url in combined_order]
+    for item in combined_results:
+        _apply_result_confidence(item)
+        provider_scores = item.get("_provider_scores") or {}
+        best_provider = _best_result_provider(provider_scores)
+        if best_provider:
+            item["source"] = best_provider
+
+    ranking_strategy = "confidence"
+    if grok_provider and len(combined_results) > 1:
+        sources_text = "\n\n".join(
+            [
+                f"{idx}. Title: {item['title']}\nURL: {item['url']}\n"
+                f"Sources: {', '.join(item.get('_sources', []))}\n"
+                f"Confidence: {item.get('score', 0)}\n"
+                f"Snippet: {item.get('content', '')}"
+                for idx, item in enumerate(combined_results, start=1)
+            ]
+        )
+        try:
+            ranking = await grok_provider.rank_sources(query, sources_text, len(combined_results))
+            combined_results = [
+                combined_results[idx - 1]
+                for idx in ranking
+                if 1 <= idx <= len(combined_results)
+            ]
+            ranking_strategy = "grok_rank_sources"
+        except Exception as e:
+            if config.debug_enabled:
+                await log_exception(None, "Combined search ranking failed", e, True)
+            combined_results.sort(key=lambda item: (-item["score"], item["_priority"]))
+            ranking_strategy = "confidence_fallback"
+    else:
+        combined_results.sort(key=lambda item: (-item["score"], item["_priority"]))
+
+    final_results = combined_results[:max_results] if max_results > 0 else []
+    for item in final_results:
+        for provider in item.get("_sources", []):
+            meta = branch_meta_by_provider.get(provider)
+            if meta:
+                meta["selected"] += 1
+
+    if grok_provider and final_results:
+        to_describe = [item for item in final_results if not item.get("content")]
+        if to_describe:
+            semaphore = asyncio.Semaphore(4)
+
+            async def _describe(item: dict) -> None:
+                async with semaphore:
+                    try:
+                        described = await grok_provider.describe_url(item["url"])
+                    except Exception:
+                        return
+                    title = _as_str(described.get("title")).strip()
+                    extracts = _as_str(described.get("extracts")).strip()
+                    if title:
+                        item["title"] = title
+                    if extracts:
+                        item["content"] = extracts
+
+            await asyncio.gather(*[_describe(item) for item in to_describe])
+
+    if raw_content_mode and final_results:
+        semaphore = asyncio.Semaphore(4)
+
+        async def _attach_raw_content(item: dict) -> None:
+            async with semaphore:
+                if item.get("raw_content"):
+                    return
+                raw_content, _, _ = await _compat_fetch_url(
+                    item["url"],
+                    query=query,
+                    chunks_per_source=chunks_per_source,
+                    extract_depth="advanced" if search_depth == "advanced" else "basic",
+                    format_mode=raw_content_mode,
+                )
+                if raw_content.strip():
+                    item["raw_content"] = raw_content
+
+        await asyncio.gather(*[_attach_raw_content(item) for item in final_results])
+
+    for item in final_results:
+        item.pop("_confidence_raw", None)
+        item.pop("_provider_scores", None)
+        item.pop("_priority", None)
+        item["sources"] = item.pop("_sources", [item.get("source")] if item.get("source") else [])
+
+    summary = ", ".join(
+        [
+            f"{item['provider']}={item['status']}"
+            + (f"({item['count']})" if item.get("count") is not None else "")
+            + f" elapsed_ms={item.get('elapsed_ms', 0)}"
+            + f" target={item.get('target', item.get('planned', search_targets.get(item['provider'], 0)))}"
+            + f" kept={item.get('kept', 0)} selected={item.get('selected', 0)}"
+            + f" filtered={item.get('filtered', 0)} deduped={item.get('deduped', 0)}"
+            + (f": {item['reason']}" if item.get("reason") else "")
+            for item in branch_meta
+        ]
+    )
+    await log_info(
+        None,
+        f"Combined search branches for query={query!r}: ranking={ranking_strategy}; {summary}; final_results={len(final_results)}",
+        True,
+    )
+
+    if max_results > 0 and not final_results:
+        raise RuntimeError("Search returned no structured results")
+
+    payload = {
+        "query": query,
+        "answer": _clean_proxy_text(answer, collapse_whitespace=False) if include_answer and answer else None,
+        "images": top_images if include_images else [],
+        "results": final_results,
+        "response_time": round(time.perf_counter() - started, 3),
+        "request_id": request_id,
+    }
+    payload["search_sources"] = branch_meta
+    payload["search_ranking"] = ranking_strategy
+    if isinstance(auto_parameters, dict):
+        payload["auto_parameters"] = auto_parameters
+    if include_usage:
+        payload["usage"] = usage or {"credits": 0}
+    return payload
+
+
+async def _compat_extract_payload(body: dict) -> dict:
+    timeout = _as_float(body.get("timeout"), default=60.0, minimum=1.0, maximum=60.0)
+    urls_value = body.get("urls")
+    urls = _as_str_list(urls_value)
+    single_url = _as_str(body.get("url")).strip()
+    if single_url:
+        urls.insert(0, single_url)
+    if not urls:
+        raise ValueError("Missing required field: urls")
+    urls = list(dict.fromkeys(urls))
+    if len(urls) > 20:
+        raise ValueError("Max 20 URLs are allowed.")
+
+    query = _as_str(body.get("query")).strip()
+    chunks_per_source = _as_int(body.get("chunks_per_source"), default=3, minimum=1, maximum=5)
+    extract_depth = _as_str(body.get("extract_depth") or "basic").strip().lower() or "basic"
+    format_mode = _as_str(body.get("format") or "markdown").strip().lower() or "markdown"
+    include_images = _as_bool(body.get("include_images"), default=False)
+    include_favicon = _as_bool(body.get("include_favicon"), default=False)
+    include_usage = _as_bool(body.get("include_usage"), default=False)
+
+    started = time.perf_counter()
+    request_id = _new_request_id()
+    results: list[dict] = []
+    failed_results: list[dict] = []
+
+    for url in urls:
+        content, _, reason = await _compat_fetch_url(
+            url,
+            query=query,
+            chunks_per_source=chunks_per_source,
+            extract_depth=extract_depth,
+            format_mode=format_mode,
+            timeout=timeout,
+        )
+        if content.strip():
+            item = {"url": url, "raw_content": content}
+            if include_images:
+                item["images"] = []
+            if include_favicon:
+                favicon = ""
+                if favicon:
+                    item["favicon"] = favicon
+            results.append(item)
+        else:
+            failed_results.append({"url": url, "error": reason or "No content returned"})
+
+    payload = {
+        "results": results,
+        "failed_results": failed_results,
+        "response_time": round(time.perf_counter() - started, 3),
+        "request_id": request_id,
+    }
+    if include_usage:
+        payload["usage"] = {"credits": 0}
+    return payload
+
+
+async def _compat_crawl_payload(body: dict) -> dict:
+    timeout = _as_float(body.get("timeout"), default=150.0, minimum=10.0, maximum=150.0)
+    fallback_reason = ""
+    if config.tavily_api_key:
+        try:
+            return await _proxy_tavily_post("/crawl", body, timeout=timeout + 10.0)
+        except CompatHTTPError as e:
+            fallback_reason = str(e)
+            await log_info(None, f"Tavily crawl unavailable, falling back to local crawl: {fallback_reason}", True)
+        except Exception as e:
+            fallback_reason = str(e)
+            await log_info(None, f"Tavily crawl failed, falling back to local crawl: {fallback_reason}", True)
+            if config.debug_enabled:
+                await log_exception(None, "Tavily upstream crawl proxy failed, falling back to local compatibility path", e, True)
+
+    url = _as_str(body.get("url")).strip()
+    if not url:
+        raise ValueError("Missing required field: url")
+
+    limit = _as_int(body.get("limit"), default=50, minimum=1, maximum=500)
+    max_depth = _as_int(body.get("max_depth"), default=1, minimum=1, maximum=5)
+    max_breadth = _as_int(body.get("max_breadth"), default=20, minimum=1, maximum=500)
+    instructions = _as_str(body.get("instructions")).strip()
+    chunks_per_source = _as_int(body.get("chunks_per_source"), default=3, minimum=1, maximum=5)
+    extract_depth = _as_str(body.get("extract_depth") or "basic").strip().lower() or "basic"
+    format_mode = _as_str(body.get("format") or "markdown").strip().lower() or "markdown"
+    include_usage = _as_bool(body.get("include_usage"), default=False)
+
+    started = time.perf_counter()
+    request_id = _new_request_id()
+    base_url = url
+    urls = [url]
+    if config.tavily_api_key and limit > 1:
+        try:
+            map_payload = await _call_tavily_map(
+                url,
+                instructions=instructions,
+                max_depth=max_depth,
+                max_breadth=max_breadth,
+                limit=limit,
+                timeout=timeout,
+            )
+            base_url, urls = _parse_map_urls(map_payload, url, limit)
+        except Exception as e:
+            reason = str(e)
+            fallback_reason = " | ".join([item for item in (fallback_reason, reason) if item])
+            await log_info(None, f"Tavily map failed during crawl fallback, scraping seed URL only: {reason}", True)
+            if config.debug_enabled:
+                await log_exception(None, "Tavily map failed during crawl fallback", e, True)
+
+    semaphore = asyncio.Semaphore(3)
+
+    async def _fetch_for_crawl(target_url: str) -> tuple[str, str, str, str]:
+        async with semaphore:
+            content, provider, reason = await _compat_fetch_url(
+                target_url,
+                query=instructions,
+                chunks_per_source=chunks_per_source,
+                extract_depth=extract_depth,
+                format_mode=format_mode,
+                timeout=timeout,
+            )
+            return target_url, content, provider, reason
+
+    fetched = await asyncio.gather(*[_fetch_for_crawl(item) for item in urls[:limit]])
+
+    results: list[dict] = []
+    for target_url, content, provider, reason in fetched:
+        if not content.strip():
+            continue
+
+        item = {"url": target_url, "raw_content": content}
+        if provider == "tavily":
+            favicon = ""
+        else:
+            favicon = ""
+        if favicon:
+            item["favicon"] = favicon
+        results.append(item)
+
+    if not results:
+        raise RuntimeError("Crawl returned no results")
+
+    payload = {
+        "base_url": base_url,
+        "results": results,
+        "response_time": round(time.perf_counter() - started, 3),
+        "request_id": request_id,
+    }
+    if include_usage:
+        payload["usage"] = {"credits": 0}
+    if fallback_reason:
+        payload["fallback"] = {
+            "from": "tavily",
+            "to": "firecrawl",
+            "reason": _clean_proxy_text(fallback_reason, collapse_whitespace=True),
+        }
+    return payload
+
+
+@mcp.custom_route("/search", methods=["POST"], include_in_schema=False)
+async def tavily_compatible_search(request: Request) -> JSONResponse:
+    try:
+        body = await _read_json_body(request)
+        auth_error = _compat_auth_error(request, body)
+        if auth_error:
+            return auth_error
+        return _json_response(await _compat_search_payload(body))
+    except CompatHTTPError as e:
+        return _json_response(e.payload, status_code=e.status_code)
+    except ValueError as e:
+        return _json_error(str(e), status_code=400)
+    except Exception as e:
+        if config.debug_enabled:
+            await log_exception(None, "Tavily-compatible search failed", e, True)
+        return _json_error(str(e), status_code=500, error_type="internal_error")
+
+
+@mcp.custom_route("/extract", methods=["POST"], include_in_schema=False)
+async def tavily_compatible_extract(request: Request) -> JSONResponse:
+    try:
+        body = await _read_json_body(request)
+        auth_error = _compat_auth_error(request, body)
+        if auth_error:
+            return auth_error
+        return _json_response(await _compat_extract_payload(body))
+    except CompatHTTPError as e:
+        return _json_response(e.payload, status_code=e.status_code)
+    except ValueError as e:
+        return _json_error(str(e), status_code=400)
+    except Exception as e:
+        if config.debug_enabled:
+            await log_exception(None, "Tavily-compatible extract failed", e, True)
+        return _json_error(str(e), status_code=500, error_type="internal_error")
+
+
+@mcp.custom_route("/crawl", methods=["POST"], include_in_schema=False)
+async def tavily_compatible_crawl(request: Request) -> JSONResponse:
+    try:
+        body = await _read_json_body(request)
+        auth_error = _compat_auth_error(request, body)
+        if auth_error:
+            return auth_error
+        return _json_response(await _compat_crawl_payload(body))
+    except CompatHTTPError as e:
+        return _json_response(e.payload, status_code=e.status_code)
+    except ValueError as e:
+        return _json_error(str(e), status_code=400)
+    except Exception as e:
+        if config.debug_enabled:
+            await log_exception(None, "Tavily-compatible crawl failed", e, True)
+        return _json_error(str(e), status_code=500, error_type="internal_error")
 
 
 @mcp.tool(
@@ -253,6 +1682,14 @@ async def web_search(
     extra = _extra_results_to_sources(tavily_results, firecrawl_results)
     all_sources = merge_sources(grok_sources, extra)
 
+    if not answer and not all_sources:
+        await _SOURCES_CACHE.set(session_id, [])
+        if not config.grok_api_key:
+            return {"session_id": session_id, "content": "配置错误: GROK_API_KEY 未配置", "sources_count": 0}
+        if extra_sources > 0 and (tavily_results or firecrawl_results):
+            return {"session_id": session_id, "content": "搜索失败: Grok 未返回答案，但补充信源已不可用或被过滤", "sources_count": 0}
+        return {"session_id": session_id, "content": "搜索失败: Grok 未返回答案且没有可用信源", "sources_count": 0}
+
     await _SOURCES_CACHE.set(session_id, all_sources)
     return {"session_id": session_id, "content": answer, "sources_count": len(all_sources)}
 
@@ -288,7 +1725,15 @@ def _fetch_result(status: str, *, content: str = "", reason: str = "") -> dict[s
     }
 
 
-async def _call_tavily_extract(url: str) -> dict[str, str]:
+async def _call_tavily_extract(
+    url: str,
+    *,
+    query: str = "",
+    chunks_per_source: int = 3,
+    extract_depth: str = "basic",
+    format_mode: str = "markdown",
+    timeout: float | None = None,
+) -> dict[str, str]:
     import httpx
     api_url = config.tavily_api_url
     api_key = config.tavily_api_key
@@ -296,9 +1741,17 @@ async def _call_tavily_extract(url: str) -> dict[str, str]:
         return _fetch_result("unavailable", reason="TAVILY_API_KEY 未配置")
     endpoint = f"{api_url.rstrip('/')}/extract"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"urls": [url], "format": "markdown"}
+    body = {
+        "urls": [url],
+        "extract_depth": extract_depth,
+        "format": format_mode,
+    }
+    if query:
+        body["query"] = query
+        body["chunks_per_source"] = chunks_per_source
+    request_timeout = timeout if timeout is not None else (30.0 if extract_depth == "advanced" else 10.0)
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=request_timeout + 10.0) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             data = response.json()
@@ -344,24 +1797,58 @@ async def _call_tavily_search(query: str, max_results: int = 6) -> list[dict] | 
         return None
 
 
-async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | None:
+async def _call_firecrawl_search(
+    query: str,
+    limit: int = 14,
+    *,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> list[dict] | None:
     import httpx
     api_key = config.firecrawl_api_key
     if not api_key:
         return None
     endpoint = f"{config.firecrawl_api_url.rstrip('/')}/search"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"query": query, "limit": limit}
+
+    def _extract_results(data: dict) -> list[dict] | None:
+        results = data.get("data", {}).get("web", [])
+        return [
+            {"title": r.get("title", ""), "url": r.get("url", ""), "description": r.get("description", "")}
+            for r in results
+        ] if results else None
+
+    async def _request_once(client: httpx.AsyncClient, search_query: str) -> list[dict] | None:
+        body = {"query": search_query, "limit": limit}
+        response = await client.post(endpoint, headers=headers, json=body)
+        response.raise_for_status()
+        return _extract_results(response.json())
+
+    async def _request_domain(client: httpx.AsyncClient, domain: str) -> list[dict]:
+        results = await _request_once(client, _build_firecrawl_search_query(query, include_domain=domain))
+        return [
+            item for item in results or []
+            if _domain_allowed(_clean_proxy_url(item.get("url")), [domain], exclude_domains or [])
+        ]
+
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
-            response = await client.post(endpoint, headers=headers, json=body)
-            response.raise_for_status()
-            data = response.json()
-            results = data.get("data", {}).get("web", [])
-            return [
-                {"title": r.get("title", ""), "url": r.get("url", ""), "description": r.get("description", "")}
-                for r in results
-            ] if results else None
+            if include_domains:
+                per_domain_results = await asyncio.gather(
+                    *[_request_domain(client, domain) for domain in include_domains]
+                )
+                merged: list[dict] = []
+                for results in per_domain_results:
+                    merged.extend(results or [])
+                return _dedupe_search_items(merged)[:limit] or None
+
+            results = await _request_once(client, _build_firecrawl_search_query(query))
+            if exclude_domains and results:
+                results = [
+                    item for item in results
+                    if _domain_allowed(_clean_proxy_url(item.get("url")), [], exclude_domains)
+                ]
+            return _dedupe_search_items(results or [])[:limit] or None
     except Exception as e:
         if config.debug_enabled:
             await log_exception(None, f"Firecrawl search failed for query={query!r}", e, True)

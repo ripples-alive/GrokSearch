@@ -408,6 +408,32 @@ claude mcp list
 | `limit` | int | ❌ | `50` | 总链接处理数上限（1-500） |
 | `timeout` | int | ❌ | `150` | 超时秒数（10-150） |
 
+## Tavily 兼容 HTTP 接口
+
+GrokSearch 也暴露一组普通 HTTP 接口，便于接入只支持 Tavily REST 配置的 Agent，例如 Hermes：
+
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/search` | POST | 接受 Tavily Search 请求体，返回 Tavily Search 兼容响应 |
+| `/extract` | POST | 接受 Tavily Extract 请求体，返回 Tavily Extract 兼容响应 |
+| `/crawl` | POST | 接受 Tavily Crawl 请求体，返回 Tavily Crawl 兼容响应 |
+
+Hermes 配置示例：
+
+```env
+TAVILY_BASE_URL=http://127.0.0.1:8000
+TAVILY_API_KEY=your-grok-search-token
+```
+
+注意：
+
+- `TAVILY_BASE_URL` 指向 GrokSearch HTTP 根地址，不要加 `/mcp`。
+- 如果 GrokSearch 设置了 `GROK_MCP_BEARER_TOKEN`，Hermes 的 `TAVILY_API_KEY` 填同一个值；兼容接口接受 `Authorization: Bearer ...`、`x-api-key` 或 JSON body 里的 `api_key`。
+- `/search` 会按我们自己的逻辑组合 Grok、Tavily 和 Firecrawl 的结果，再封装成 Tavily 兼容响应。
+- `/search` 会把 `include_domains` / `exclude_domains` 前置传给各搜索渠道，再合并去重。重复出现在多个渠道的结果会提高置信度；Grok 可用时优先用 `rank_sources` 做最终排序，不可用时按综合置信度排序。
+- `/extract` 会优先使用 Tavily Extract，失败后再降级到 Firecrawl Scrape。
+- `/crawl` 仍然优先复用 Tavily 风格的请求与返回语义；未拿到可用结果时再走本地兼容抓取路径。
+
 ### `get_config_info` — 配置诊断
 
 无需参数。显示所有配置状态、测试 Grok API 连接、返回响应时间和可用模型列表（API Key 自动脱敏）。

@@ -1,5 +1,6 @@
 import httpx
 import json
+import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
@@ -125,6 +126,11 @@ class GrokSearchProvider(BaseSearchProvider):
     def get_provider_name(self) -> str:
         return "Grok"
 
+    @staticmethod
+    def _response_stats(content: str) -> str:
+        line_count = content.count("\n") + 1 if content else 0
+        return f"chars={len(content)} lines={line_count}"
+
     async def search(self, query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx=None) -> List[SearchResult]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -149,9 +155,9 @@ class GrokSearchProvider(BaseSearchProvider):
             "stream": True,
         }
 
-        await log_info(ctx, f"platform_prompt: { query + platform_prompt}", config.debug_enabled)
+        await log_info(ctx, f"Grok search request: query={query!r} platform={platform!r}", config.debug_enabled)
 
-        return await self._execute_stream_with_retry(headers, payload, ctx)
+        return await self._execute_stream_with_retry(headers, payload, ctx, operation="search")
 
     async def fetch(self, url: str, ctx=None) -> str:
         headers = {
@@ -169,7 +175,7 @@ class GrokSearchProvider(BaseSearchProvider):
             ],
             "stream": True,
         }
-        return await self._execute_stream_with_retry(headers, payload, ctx)
+        return await self._execute_stream_with_retry(headers, payload, ctx, operation="fetch")
 
     async def _parse_streaming_response(self, response, ctx=None) -> str:
         content = ""
@@ -207,13 +213,11 @@ class GrokSearchProvider(BaseSearchProvider):
                     content = message.get("content", "")
             except json.JSONDecodeError:
                 pass
-        
-        await log_info(ctx, f"content: {content}", config.debug_enabled)
-
         return content
 
-    async def _execute_stream_with_retry(self, headers: dict, payload: dict, ctx=None) -> str:
+    async def _execute_stream_with_retry(self, headers: dict, payload: dict, ctx=None, operation: str = "completion") -> str:
         """执行带重试机制的流式 HTTP 请求"""
+        started = time.perf_counter()
         timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
 
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
@@ -231,7 +235,14 @@ class GrokSearchProvider(BaseSearchProvider):
                         json=payload,
                     ) as response:
                         response.raise_for_status()
-                        return await self._parse_streaming_response(response, ctx)
+                        content = await self._parse_streaming_response(response, ctx)
+                        elapsed_ms = round((time.perf_counter() - started) * 1000)
+                        await log_info(
+                            ctx,
+                            f"Grok {operation} completed: elapsed_ms={elapsed_ms} {self._response_stats(content)}",
+                            config.debug_enabled,
+                        )
+                        return content
 
     async def describe_url(self, url: str, ctx=None) -> dict:
         """让 Grok 阅读单个 URL 并返回 title + extracts"""
@@ -247,7 +258,7 @@ class GrokSearchProvider(BaseSearchProvider):
             ],
             "stream": True,
         }
-        result = await self._execute_stream_with_retry(headers, payload, ctx)
+        result = await self._execute_stream_with_retry(headers, payload, ctx, operation="describe_url")
         title, extracts = url, ""
         for line in result.strip().splitlines():
             if line.startswith("Title:"):
@@ -270,7 +281,7 @@ class GrokSearchProvider(BaseSearchProvider):
             ],
             "stream": True,
         }
-        result = await self._execute_stream_with_retry(headers, payload, ctx)
+        result = await self._execute_stream_with_retry(headers, payload, ctx, operation="rank_sources")
         order: list[int] = []
         seen: set[int] = set()
         for token in result.strip().split():

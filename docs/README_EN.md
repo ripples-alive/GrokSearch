@@ -364,6 +364,32 @@ Traverses website structure via Tavily Map API, discovering URLs and generating 
 | `limit` | int | No | `50` | Total link processing limit (1-500) |
 | `timeout` | int | No | `150` | Timeout in seconds (10-150) |
 
+## Tavily-Compatible HTTP API
+
+GrokSearch also exposes plain HTTP endpoints for agents that can configure a Tavily REST provider, such as Hermes:
+
+| Path | Method | Description |
+|------|--------|-------------|
+| `/search` | POST | Accepts Tavily Search request bodies and returns Tavily Search compatible responses |
+| `/extract` | POST | Accepts Tavily Extract request bodies and returns Tavily Extract compatible responses |
+| `/crawl` | POST | Accepts Tavily Crawl request bodies and returns Tavily Crawl compatible responses |
+
+Hermes configuration example:
+
+```env
+TAVILY_BASE_URL=http://127.0.0.1:8000
+TAVILY_API_KEY=your-grok-search-token
+```
+
+Notes:
+
+- `TAVILY_BASE_URL` should point to the GrokSearch HTTP root, without `/mcp`.
+- If GrokSearch sets `GROK_MCP_BEARER_TOKEN`, use the same value as Hermes `TAVILY_API_KEY`; the compatible endpoints accept `Authorization: Bearer ...`, `x-api-key`, or JSON body `api_key`.
+- `/search` combines Grok, Tavily, and Firecrawl results using our own ranking path, then returns a Tavily-compatible response shape.
+- `/search` forwards `include_domains` / `exclude_domains` into each search provider before merging and deduplicating results. Results confirmed by multiple providers get higher confidence; when Grok is available, `rank_sources` is used for final ordering, otherwise confidence score is used as fallback ordering.
+- `/extract` prefers Tavily Extract and only falls back to Firecrawl Scrape when Tavily does not return usable content.
+- `/crawl` still reuses Tavily-style request and response semantics first, then falls back to the local compatibility path when needed.
+
 ### `get_config_info` — Configuration Diagnostics
 
 No parameters required. Displays all configuration status, tests Grok API connection, returns response time and available model list (API keys auto-masked).
